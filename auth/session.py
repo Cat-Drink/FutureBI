@@ -1,18 +1,33 @@
-"""服务端会话存储（进程内、线程安全）。
+"""服务端会话存储（线程安全；进程内 或 SQLite 共享存储）。
 
 会话是不透明的服务端签发凭证：客户端只持有 session_id，服务端据此从
 SessionStore 解析出 username / principal。与 JWT 互补：支持"登出即失效"，
 适合浏览器 Cookie 场景。到期自动失效并惰性清理。
+
+P0-4 生产加固：新增 SqliteSessionStore —— 会话落盘 SQLite（WAL），
+重启不丢、多 worker 可共享；配置 AUTH_SESSION_DB 后默认存储自动切换。
 """
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 from config import settings
+
+_SESSION_DDL = """
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    username   TEXT NOT NULL,
+    principal  TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+)
+"""
 
 
 @dataclass(frozen=True)
@@ -29,7 +44,11 @@ class Session:
 
 
 class SessionStore:
-    """线程安全的会话注册表（默认进程内存储，TTL 可配）。"""
+    """线程安全的会话注册表（默认进程内存储，TTL 可配）。
+
+    子类可替换存储后端（见 SqliteSessionStore），接口保持一致：
+    create / get / revoke / prune。
+    """
 
     def __init__(self, ttl_seconds: int | None = None) -> None:
         self._ttl = ttl_seconds if ttl_seconds is not None else settings.AUTH_SESSION_TTL
@@ -76,15 +95,98 @@ class SessionStore:
             return len(expired)
 
 
+class SqliteSessionStore(SessionStore):
+    """SQLite 持久化会话存储（P0-4）：重启不丢、多 worker 可共享。
+
+    与进程内 SessionStore 接口完全一致；数据落盘单文件 SQLite（WAL 模式）。
+    进程内用一把锁串行化访问，跨进程由 SQLite 自身锁 + busy_timeout 保证
+    并发一致性。TTL 语义与进程内版本相同（惰性清理 + prune）。
+    """
+
+    def __init__(self, db_path: str | Path, ttl_seconds: int | None = None) -> None:
+        super().__init__(ttl_seconds)
+        self._db_path = str(db_path)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute(_SESSION_DDL)
+        self._conn.commit()
+
+    def create(self, username: str, principal: str, ttl_seconds: int | None = None) -> Session:
+        now = time.time()
+        ttl = ttl_seconds if ttl_seconds is not None else self._ttl
+        session = Session(
+            session_id=uuid.uuid4().hex,
+            username=username,
+            principal=principal,
+            created_at=now,
+            expires_at=now + ttl,
+        )
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO sessions (session_id, username, principal, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    session.session_id,
+                    session.username,
+                    session.principal,
+                    session.created_at,
+                    session.expires_at,
+                ),
+            )
+            self._conn.commit()
+        return session
+
+    def get(self, session_id: str) -> Session | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT session_id, username, principal, created_at, expires_at "
+                "FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            session = Session(*row)
+            if session.expired:
+                self._conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+                self._conn.commit()
+                return None
+            return session
+
+    def revoke(self, session_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def prune(self) -> int:
+        now = time.time()
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
+            self._conn.commit()
+            return cur.rowcount
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+
 _default_store: SessionStore | None = None
 _store_lock = threading.Lock()
 
 
 def default_session_store() -> SessionStore:
-    """进程内复用的默认会话存储（按 settings.AUTH_SESSION_TTL 配置 TTL）。"""
+    """复用的默认会话存储（按 settings.AUTH_SESSION_TTL 配置 TTL）。
+
+    配置 AUTH_SESSION_DB 时使用 SQLite 持久化存储（生产共享、重启不丢）；
+    否则使用进程内存储（本地开发/演示）。
+    """
     global _default_store
     if _default_store is None:
         with _store_lock:
             if _default_store is None:
-                _default_store = SessionStore()
+                if settings.AUTH_SESSION_DB:
+                    _default_store = SqliteSessionStore(settings.AUTH_SESSION_DB)
+                else:
+                    _default_store = SessionStore()
     return _default_store

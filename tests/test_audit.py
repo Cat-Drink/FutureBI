@@ -59,6 +59,48 @@ def test_audit_store_jsonl(tmp_path):
     assert json.loads(lines[1])["error"] == "boom"
 
 
+def test_audit_store_db_multi_writer_threads(tmp_path):
+    """P0-4：多写者写同一审计库不冲突（跨进程锁 + 短连接）。"""
+    import threading
+
+    db_path = tmp_path / "audit-multi.duckdb"
+    errors: list[Exception] = []
+
+    def writer(tag: str) -> None:
+        store = AuditStore(db_path=db_path)
+        try:
+            for i in range(5):
+                store.write(
+                    AuditRecord(
+                        request_id=f"{tag}-{i}",
+                        prompt=f"{tag} #{i}",
+                        sql="SELECT 1",
+                        error=None,
+                    )
+                )
+        except Exception as exc:  # pragma: no cover
+            errors.append(exc)
+        finally:
+            store.close()
+
+    threads = [threading.Thread(target=writer, args=(f"w{n}",)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        count = conn.execute("SELECT count(*) FROM audit_log").fetchone()[0]
+        distinct = conn.execute("SELECT count(DISTINCT request_id) FROM audit_log").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 20
+    assert distinct == 20
+    assert conn is not None
+
+
 def test_audit_store_duckdb(tmp_path):
     store = AuditStore(db_path=tmp_path / "audit.duckdb")
     store.write(

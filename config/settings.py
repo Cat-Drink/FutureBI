@@ -94,3 +94,6 @@ AUTH_JWT_AUDIENCE: str = os.getenv("AUTH_JWT_AUDIENCE", "futurebi-web")
 # 令牌有效期（秒）：JWT 与 Session 各自独立
 AUTH_JWT_TTL: int = int(os.getenv("AUTH_JWT_TTL", "3600"))
 AUTH_SESSION_TTL: int = int(os.getenv("AUTH_SESSION_TTL", "86400"))
+# 会话共享存储（P0-4）：配置为 SQLite 路径时启用持久化（重启不丢、多 worker 可共享）；
+# 留空则使用进程内存储（本地开发/演示）。
+AUTH_SESSION_DB: str | None = os.getenv("AUTH_SESSION_DB") or None

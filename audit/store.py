@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,49 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
+class _CrossProcessLock:
+    """跨进程互斥文件锁（P0-4 审计多写者）：Windows msvcrt / POSIX fcntl。
+
+    用于保护 JSONL 追加与 DuckDB 写入：多 worker 进程写同一审计文件时
+    串行化，避免交错行与 DuckDB 文件锁冲突。
+    """
+
+    def __init__(self, target: Path) -> None:
+        self._lock_path = target.with_name(target.name + ".lock")
+
+    def __enter__(self) -> _CrossProcessLock:
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self._lock_path, "a+b")
+        # 确保文件至少一个字节：msvcrt.locking 不能锁空文件
+        if self._fh.seek(0, 2) == 0:
+            self._fh.write(b"\0")
+            self._fh.flush()
+        self._fh.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(self._fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        try:
+            self._fh.seek(0)
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._fh.close()
+
+
 def _json_dump(value: dict[str, Any] | None) -> str | None:
     if value is None:
         return None
@@ -63,6 +107,7 @@ class AuditStore:
         self.db_path = db_path
         self._lock = threading.Lock()
         self._conn: duckdb.DuckDBPyConnection | None = None
+        self._schema_ready = False  # 每个进程只做一次迁移
 
     def write(self, record: AuditRecord) -> None:
         with self._lock:
@@ -99,33 +144,42 @@ class AuditStore:
                 self._conn.execute(f'ALTER TABLE audit_log ADD COLUMN "{column}" {column_type}')
 
     def _append_jsonl(self, record: AuditRecord) -> None:
-        self.jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(record.to_dict(), ensure_ascii=False)
-        with self.jsonl_path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        with _CrossProcessLock(self.jsonl_path):
+            self.jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(record.to_dict(), ensure_ascii=False)
+            with self.jsonl_path.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
 
     def _insert_db(self, record: AuditRecord) -> None:
-        if self._conn is None:
+        # 跨进程文件锁 + 短连接：多 worker 写同一审计库时串行化，互不冲突
+        with _CrossProcessLock(self.db_path):
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = duckdb.connect(str(self.db_path))
-            self._conn.execute(_AUDIT_DDL)
-            self._migrate_schema()
-        self._conn.execute(
-            _INSERT_SQL,
-            [
-                record.request_id,
-                record.session_id,
-                record.user,
-                record.principal,
-                record.prompt,
-                _json_dump(record.retrieval_context),
-                _json_dump(record.dsl),
-                record.sql,
-                record.latency_ms,
-                record.row_count,
-                record.scan_rows,
-                record.rewrites,
-                record.error,
-                record.created_at,
-            ],
-        )
+            conn = duckdb.connect(str(self.db_path))
+            try:
+                conn.execute(_AUDIT_DDL)
+                if not self._schema_ready:
+                    self._conn = conn
+                    self._migrate_schema()
+                    self._conn = None
+                    self._schema_ready = True
+                conn.execute(
+                    _INSERT_SQL,
+                    [
+                        record.request_id,
+                        record.session_id,
+                        record.user,
+                        record.principal,
+                        record.prompt,
+                        _json_dump(record.retrieval_context),
+                        _json_dump(record.dsl),
+                        record.sql,
+                        record.latency_ms,
+                        record.row_count,
+                        record.scan_rows,
+                        record.rewrites,
+                        record.error,
+                        record.created_at,
+                    ],
+                )
+            finally:
+                conn.close()

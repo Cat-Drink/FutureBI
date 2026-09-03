@@ -135,6 +135,55 @@ def test_session_revoke_returns_false_when_missing():
     assert not store.revoke("no-such-id")
 
 
+def test_sqlite_session_store_persists_across_instances(tmp_path):
+    """P0-4：SQLite 会话存储重启不丢 —— 新实例可读到旧实例签发的会话。"""
+    from auth.session import SqliteSessionStore
+
+    db = tmp_path / "sessions.sqlite3"
+    store1 = SqliteSessionStore(db, ttl_seconds=600)
+    session = store1.create("bob", "restricted")
+    store1.close()
+
+    store2 = SqliteSessionStore(db, ttl_seconds=600)
+    try:
+        restored = store2.get(session.session_id)
+        assert restored is not None
+        assert restored.username == "bob"
+        assert restored.principal == "restricted"
+        assert store2.revoke(session.session_id)
+        assert store2.get(session.session_id) is None
+    finally:
+        store2.close()
+
+
+def test_sqlite_session_store_expiry(tmp_path):
+    """SQLite 会话同样按 TTL 惰性失效。"""
+    from auth.session import SqliteSessionStore
+
+    db = tmp_path / "sessions.sqlite3"
+    store = SqliteSessionStore(db, ttl_seconds=1)
+    session = store.create("bob", "restricted")
+    time.sleep(1.1)
+    try:
+        assert store.get(session.session_id) is None
+    finally:
+        store.close()
+
+
+def test_sqlite_session_store_prune(tmp_path):
+    from auth.session import SqliteSessionStore
+
+    db = tmp_path / "sessions.sqlite3"
+    store = SqliteSessionStore(db, ttl_seconds=-1)  # 立即过期
+    store.create("bob", "restricted")
+    store.create("admin", "admin")
+    try:
+        assert store.prune() >= 2
+        assert store.prune() == 0
+    finally:
+        store.close()
+
+
 # --------------------------------------------------------------------------- #
 # 网关：authenticate 从请求头解析并强制绑定 principal
 # --------------------------------------------------------------------------- #
