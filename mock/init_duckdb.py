@@ -1,0 +1,180 @@
+"""本地 Mock 数仓初始化脚本。
+
+用法（在项目根目录执行）：
+    python -m mock.init_duckdb
+
+效果：
+- 在项目根目录创建 analytics_sandbox.duckdb；
+- 写入 3 张业务表：dim_user / dim_product / fact_orders；
+- 写入 _field_metadata 元数据清单表；
+- 使用固定随机种子与锚点日期，保证数据可复现（任意机器结果一致）。
+"""
+from __future__ import annotations
+
+import random
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import duckdb
+
+from config import settings
+from mock.metadata import FIELD_METADATA, TABLE_METADATA
+
+# 固定随机种子：保证评测可复现
+SEED = 42
+
+PROVINCES = ["广东", "浙江", "江苏", "北京", "上海", "四川", "湖北", "山东"]
+GENDERS = ["M", "F"]
+CATEGORIES = {
+    "数码": ["华为", "小米", "苹果", "联想"],
+    "家电": ["美的", "格力", "海尔", "TCL"],
+    "服饰": ["优衣库", "耐克", "阿迪达斯", "李宁"],
+    "美妆": ["兰蔻", "雅诗兰黛", "欧莱雅", "自然堂"],
+    "食品": ["三只松鼠", "良品铺子", "蒙牛", "伊利"],
+    "家居": ["宜家", "顾家", "全友", "林氏木业"],
+}
+
+N_USERS = 200
+N_PRODUCTS = 60
+N_ORDERS = 3000
+
+
+def generate(seed: int = SEED) -> tuple[list, list, list]:
+    """生成三张表的行数据，返回 (users, products, orders)。"""
+    rng = random.Random(seed)
+    asof = settings.AS_OF_DATE
+
+    users: list[tuple] = []
+    for uid in range(1, N_USERS + 1):
+        province = rng.choice(PROVINCES)
+        gender = rng.choice(GENDERS)
+        register_time = asof - timedelta(days=rng.randint(0, 730))
+        users.append((uid, province, gender, register_time))
+
+    products: list[tuple] = []
+    price_map: dict[int, float] = {}
+    for pid in range(1, N_PRODUCTS + 1):
+        category = rng.choice(list(CATEGORIES.keys()))
+        brand = rng.choice(CATEGORIES[category])
+        unit_price = round(rng.uniform(9.9, 9999.0), 2)
+        products.append((pid, category, brand, unit_price))
+        price_map[pid] = unit_price
+
+    orders: list[tuple] = []
+    for oid in range(1, N_ORDERS + 1):
+        uid = rng.randint(1, N_USERS)
+        pid = rng.randint(1, N_PRODUCTS)
+        qty = rng.randint(1, 5)
+        gross = round(price_map[pid] * qty, 2)
+        discount = round(gross * rng.uniform(0.0, 0.30), 2)
+        amount = round(gross - discount, 2)
+        status = "SUCCESS" if rng.random() < 0.88 else "CANCELLED"
+        order_time = asof - timedelta(
+            days=rng.randint(0, 89), seconds=rng.randint(0, 86399)
+        )
+        orders.append((oid, uid, pid, amount, discount, status, order_time))
+
+    return users, products, orders
+
+
+def _ddl(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute("""
+        CREATE TABLE dim_user (
+            user_id       INTEGER PRIMARY KEY,
+            province      VARCHAR,
+            gender        VARCHAR,
+            register_time TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE dim_product (
+            product_id  INTEGER PRIMARY KEY,
+            category    VARCHAR,
+            brand       VARCHAR,
+            unit_price  DOUBLE
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE fact_orders (
+            order_id        INTEGER PRIMARY KEY,
+            user_id         INTEGER,
+            product_id      INTEGER,
+            order_amount    DOUBLE,
+            discount_amount DOUBLE,
+            pay_status      VARCHAR,
+            order_time      TIMESTAMP
+        )
+    """)
+
+
+def build_tables(conn: duckdb.DuckDBPyConnection, seed: int = SEED) -> None:
+    """在给定连接上建表并灌数据（内存连接或文件连接均可）。"""
+    _ddl(conn)
+    users, products, orders = generate(seed)
+
+    conn.executemany(
+        "INSERT INTO dim_user VALUES (?, ?, ?, ?)", users
+    )
+    conn.executemany(
+        "INSERT INTO dim_product VALUES (?, ?, ?, ?)", products
+    )
+    conn.executemany(
+        "INSERT INTO fact_orders VALUES (?, ?, ?, ?, ?, ?, ?)", orders
+    )
+
+    _write_metadata(conn)
+
+
+def _write_metadata(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute("""
+        CREATE TABLE _field_metadata (
+            table_name  VARCHAR,
+            column_name VARCHAR,
+            comment     VARCHAR
+        )
+    """)
+    rows = [
+        (table, column, comment)
+        for table, cols in FIELD_METADATA.items()
+        for column, comment in cols.items()
+    ]
+    conn.executemany(
+        "INSERT INTO _field_metadata VALUES (?, ?, ?)", rows
+    )
+    # 表级注释也一并入库
+    conn.execute("""
+        CREATE TABLE _table_metadata (
+            table_name VARCHAR,
+            comment    VARCHAR
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO _table_metadata VALUES (?, ?)", list(TABLE_METADATA.items())
+    )
+
+
+def main() -> None:
+    db_path = Path(settings.DB_PATH)
+    db_path.unlink(missing_ok=True)  # 幂等重建
+    conn = duckdb.connect(str(db_path))
+    try:
+        build_tables(conn)
+        counts = {
+            t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            for t in ("dim_user", "dim_product", "fact_orders")
+        }
+        print("[init_duckdb] 表创建完成:")
+        for t, n in counts.items():
+            print(f"  - {t}: {n} 行")
+        print(f"[init_duckdb] 数据库文件: {db_path}")
+        print("[init_duckdb] 字段业务注释（_field_metadata）:")
+        for row in conn.execute(
+            "SELECT table_name, column_name, comment FROM _field_metadata ORDER BY table_name"
+        ).fetchall():
+            print(f"  - {row[0]}.{row[1]}: {row[2]}")
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()

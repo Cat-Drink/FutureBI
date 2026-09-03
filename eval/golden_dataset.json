@@ -1,0 +1,371 @@
+[
+  {
+    "id": "Q01",
+    "question": "2024年6月成功订单的总销售额(GMV)是多少？",
+    "scenario": "单指标聚合",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [],
+      "time_filter": {
+        "granularity": "day",
+        "range_type": "absolute",
+        "absolute": {
+          "start": "2024-06-01",
+          "end": "2024-07-01"
+        }
+      },
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "SELECT SUM(f.order_amount) AS gmv\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
+  },
+  {
+    "id": "Q02",
+    "question": "各品类成功订单的GMV分布？",
+    "scenario": "带维度拆分",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [
+        {
+          "field": "category"
+        }
+      ],
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "SELECT p.category AS category, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.category\nLIMIT 100"
+  },
+  {
+    "id": "Q03",
+    "question": "上个月的成功订单GMV是多少？",
+    "scenario": "相对时间区间",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [],
+      "time_filter": {
+        "granularity": "month",
+        "range_type": "relative",
+        "relative": {
+          "amount": 1,
+          "unit": "month",
+          "mode": "calendar"
+        },
+        "reference_date": "2024-06-30"
+      },
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "SELECT SUM(f.order_amount) AS gmv\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-05-01 00:00:00' AND f.order_time < TIMESTAMP '2024-06-01 00:00:00'\nLIMIT 100"
+  },
+  {
+    "id": "Q04",
+    "question": "广东省数码类目成功订单的GMV？",
+    "scenario": "多过滤条件组合",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [],
+      "filters": [
+        {
+          "field": "province",
+          "operator": "eq",
+          "value": "广东"
+        },
+        {
+          "field": "category",
+          "operator": "eq",
+          "value": "数码"
+        },
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "SELECT SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE u.province = '广东' AND p.category = '数码' AND f.pay_status = 'SUCCESS'\nLIMIT 100"
+  },
+  {
+    "id": "Q05",
+    "question": "成功订单GMV最高的前5个品牌？",
+    "scenario": "Top N 排序",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [
+        {
+          "field": "brand"
+        }
+      ],
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [
+        {
+          "field": "gmv",
+          "direction": "desc"
+        }
+      ],
+      "limit": 5
+    },
+    "sql": "SELECT p.brand AS brand, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.brand\nORDER BY gmv DESC\nLIMIT 5"
+  },
+  {
+    "id": "Q06",
+    "question": "2024年6月每日成功订单GMV趋势？",
+    "scenario": "时间粒度趋势",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [
+        {
+          "field": "order_time"
+        }
+      ],
+      "time_filter": {
+        "granularity": "day",
+        "range_type": "absolute",
+        "absolute": {
+          "start": "2024-06-01",
+          "end": "2024-07-01"
+        }
+      },
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [
+        {
+          "field": "order_time",
+          "direction": "asc"
+        }
+      ],
+      "limit": 100
+    },
+    "sql": "SELECT date_trunc('day', f.order_time) AS order_time, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nGROUP BY date_trunc('day', f.order_time)\nORDER BY order_time ASC\nLIMIT 100"
+  },
+  {
+    "id": "Q07",
+    "question": "成功订单总数是多少？",
+    "scenario": "计数聚合",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_id",
+          "agg": "count",
+          "alias": "order_count"
+        }
+      ],
+      "dimensions": [],
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "SELECT COUNT(f.order_id) AS order_count\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS'\nLIMIT 100"
+  },
+  {
+    "id": "Q08",
+    "question": "2024年6月成功下单的去重用户数？",
+    "scenario": "去重计数",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "user_id",
+          "agg": "count_distinct",
+          "alias": "active_users"
+        }
+      ],
+      "dimensions": [],
+      "time_filter": {
+        "granularity": "day",
+        "range_type": "absolute",
+        "absolute": {
+          "start": "2024-06-01",
+          "end": "2024-07-01"
+        }
+      },
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "SELECT COUNT(DISTINCT f.user_id) AS active_users\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
+  },
+  {
+    "id": "Q09",
+    "question": "2024年6月成功订单的人均消费(ARPU)是多少？",
+    "scenario": "比率指标 ARPU",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "ratio",
+          "numerator": {
+            "kind": "aggregate",
+            "field": "order_amount",
+            "agg": "sum",
+            "alias": "gmv"
+          },
+          "denominator": {
+            "kind": "aggregate",
+            "field": "user_id",
+            "agg": "count_distinct",
+            "alias": "active_users"
+          },
+          "alias": "arpu"
+        }
+      ],
+      "dimensions": [],
+      "time_filter": {
+        "granularity": "day",
+        "range_type": "absolute",
+        "absolute": {
+          "start": "2024-06-01",
+          "end": "2024-07-01"
+        }
+      },
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "SELECT (SUM(f.order_amount)) / (COUNT(DISTINCT f.user_id)) AS arpu\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
+  },
+  {
+    "id": "Q10",
+    "question": "广东省或浙江省、订单金额100到5000元之间的各品类成功订单GMV？",
+    "scenario": "in/between 操作符 + 维度",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [
+        {
+          "field": "category"
+        }
+      ],
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        },
+        {
+          "field": "province",
+          "operator": "in",
+          "value": [
+            "广东",
+            "浙江"
+          ]
+        },
+        {
+          "field": "order_amount",
+          "operator": "between",
+          "value": [
+            100,
+            5000
+          ]
+        }
+      ],
+      "order_by": [
+        {
+          "field": "gmv",
+          "direction": "desc"
+        }
+      ],
+      "limit": 100
+    },
+    "sql": "SELECT p.category AS category, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS' AND u.province IN ('广东', '浙江') AND f.order_amount BETWEEN 100.0 AND 5000.0\nGROUP BY p.category\nORDER BY gmv DESC\nLIMIT 100"
+  }
+]
