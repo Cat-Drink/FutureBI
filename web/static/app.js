@@ -3,6 +3,8 @@
 
   var COLORS = ["#4f6ef7", "#22b8cf", "#12b886", "#f59f00", "#e64980", "#845ef7", "#74b816", "#f76707"];
   var $ = function (id) { return document.getElementById(id); };
+  var TOKEN_KEY = "futurebi_token";
+  var SESSION_KEY = "futurebi_session";
 
   function esc(s) {
     return String(s == null ? "" : s)
@@ -23,6 +25,85 @@
     var e = $("error");
     e.textContent = msg;
     e.classList.remove("hidden");
+  }
+
+  // ---------------------------------------------------------------- 鉴权
+  function getToken() { try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
+  function setToken(t) { try { sessionStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
+  function clearToken() { try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    var token = getToken();
+    if (token) { opts.headers.Authorization = "Bearer " + token; }
+    return fetch(path, opts).then(function (r) {
+      return r.json().then(function (data) {
+        if (r.status === 401) {
+          // 会话失效 -> 回到登录态
+          clearToken();
+          showLogin();
+        }
+        return data;
+      });
+    });
+  }
+
+  function showLogin() {
+    $("login-form").classList.remove("hidden");
+    $("userinfo").classList.add("hidden");
+  }
+
+  function showUser(user) {
+    $("login-form").classList.add("hidden");
+    $("userinfo").classList.remove("hidden");
+    $("display-name").textContent = user.display_name + "（" + user.username + "）";
+    var badge = $("principal-badge");
+    badge.textContent = "主体：" + user.principal;
+    badge.title = "数据权限主体由服务端从身份映射，客户端不可指定";
+  }
+
+  function login() {
+    var username = $("username").value.trim();
+    var password = $("password").value;
+    if (!username || !password) { showError("请输入用户名与口令"); return; }
+    var btn = $("login-btn");
+    btn.disabled = true; btn.textContent = "登录中…";
+    hideError();
+    fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username, password: password })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.token) {
+          setToken(data.token);
+          $("password").value = "";
+          showUser(data.user);
+        } else {
+          showError(data.error || "登录失败");
+        }
+      })
+      .catch(function (err) { showError("登录请求失败：" + err); })
+      .finally(function () { btn.disabled = false; btn.textContent = "登录"; });
+  }
+
+  function logout() {
+    fetch("/api/auth/logout", { method: "POST" }).then(function () {
+      clearToken();
+      showLogin();
+    }).catch(function () {
+      clearToken();
+      showLogin();
+    });
+  }
+
+  function restoreSession() {
+    api("/api/auth/me").then(function (data) {
+      if (data && data.username) { showUser(data); }
+      else { showLogin(); }
+    }).catch(function () { showLogin(); });
   }
 
   // ---------------------------------------------------------------- 表格
@@ -88,7 +169,6 @@
       s += "<path d='M " + cx + " " + cy + " L " + x1.toFixed(2) + " " + y1.toFixed(2) + " A " + r + " " + r + " 0 " + large + " 1 " + x2.toFixed(2) + " " + y2.toFixed(2) + " Z' fill='" + COLORS[i % COLORS.length] + "'></path>";
       angle = end;
     }
-    // 图例
     var lx = 300, ly = 40;
     for (var j = 0; j < rows.length && j < 10; j++) {
       var pct = (vals[j] / total * 100).toFixed(1);
@@ -208,17 +288,17 @@
   function run() {
     var q = $("query").value.trim();
     if (!q) { showError("请输入问题"); return; }
+    if (!getToken()) { showError("请先登录后再查询"); return; }
     hideError();
     var btn = $("run");
     btn.disabled = true;
     btn.textContent = "查询中…";
-    var principal = $("principal").value || null;
-    fetch("/api/query", {
+    // 客户端不再提交 principal：主体由服务端从身份映射（P0）
+    api("/api/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: q, principal: principal })
+      body: JSON.stringify({ query: q })
     })
-      .then(function (r) { return r.json(); })
       .then(function (data) { render(data); })
       .catch(function (err) { showError("请求失败：" + err); })
       .finally(function () {
@@ -227,7 +307,12 @@
       });
   }
 
+  $("login-btn").addEventListener("click", function (e) { e.preventDefault(); login(); });
+  $("login-form").addEventListener("submit", function (e) { e.preventDefault(); login(); });
+  $("logout-btn").addEventListener("click", logout);
   $("run").addEventListener("click", run);
   $("query").addEventListener("keydown", function (e) { if (e.key === "Enter") run(); });
+
+  restoreSession();
   run();
 })();

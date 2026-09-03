@@ -86,7 +86,7 @@ def test_run_query_self_heal_rewrites(conn, monkeypatch):
 
     monkeypatch.setattr(svc, "execute_sql", fake_execute)
     # 模拟 LLM 重写：原样返回 DSL（验证重试链路而非重写质量）
-    monkeypatch.setattr(svc, "rewrite_dsl", lambda q, d, e, attempts=1: d)
+    monkeypatch.setattr(svc, "rewrite_dsl", lambda q, d, e, attempts=1, principal=None: d)
 
     result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
     assert "error" not in result
@@ -110,7 +110,7 @@ def test_run_query_scan_cap_self_heals(conn, monkeypatch):
         return real_execute(c, sql, **kwargs)
 
     monkeypatch.setattr(svc, "execute_sql", fake_execute)
-    monkeypatch.setattr(svc, "rewrite_dsl", lambda q, d, e, attempts=1: d)
+    monkeypatch.setattr(svc, "rewrite_dsl", lambda q, d, e, attempts=1, principal=None: d)
 
     result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
     assert "error" not in result

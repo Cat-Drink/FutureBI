@@ -122,6 +122,7 @@ def _execute_with_self_heal(
                     current_dsl,
                     f"{type(exc).__name__}: {exc}",
                     attempts=1,
+                    principal=principal,
                 )
                 current_dsl = apply_policy(rewritten, principal)
                 rewrites += 1
@@ -169,7 +170,7 @@ def run_query(
 
     ctx_override: dict[str, Any] | None = None
     try:
-        route = route_query(query)
+        route = route_query(query, principal)
         result["intent"] = route.intent.value
         result["action"] = route.action.value
         result["message"] = route.message
@@ -228,6 +229,7 @@ def run_query(
         request_id=rid,
         session_id=session_id,
         user=user or principal,
+        principal=principal,
         prompt=query,
         retrieval_context=ctx,
         dsl=dsl.model_dump(mode="json") if dsl is not None else None,

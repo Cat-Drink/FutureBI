@@ -11,13 +11,12 @@
 
 from __future__ import annotations
 
+from security.errors import SecurityError
 from security.policy import POLICIES, Policy
 from semantic.catalog import COLUMNS
 from semantic.dsl_schema import Filter, QueryDSL, RatioMetric, WindowMetric
 
-
-class SecurityError(RuntimeError):
-    """权限校验失败：主体无权访问引用的表/列，或主体未登记。"""
+__all__ = ["SecurityError", "apply_policy"]
 
 
 def _referenced_fields(dsl: QueryDSL) -> set[str]:

@@ -1,13 +1,23 @@
-"""FutureBI Web UI 服务（零依赖，标准库 http.server）。
+"""FutureBI Web UI 服务（零依赖，标准库 http.server）+ 统一身份认证网关（P0）。
 
 用法:
     python -m web.server [端口]     # 默认 8000
 
-路由:
+公开路由:
     GET  /              -> 前端页面
+    GET  /static/*      -> 静态资源
     GET  /api/health    -> 健康检查
-    POST /api/query     -> 完整链路（body: {"query": "...", "principal": "..."}，
-                          可选 "session_id" / "user" / "request_id"）
+    POST /api/auth/login   -> 登录：校验用户名/口令，签发 JWT + 会话
+    POST /api/auth/logout  -> 登出：吊销会话（需 X-Session-ID 或 session Cookie）
+    GET  /api/auth/me      -> 当前身份（需 Bearer JWT 或会话）
+
+受保护路由:
+    POST /api/query     -> 完整链路（需 Bearer JWT 或会话）
+
+P0 安全约束（网关层强制）：
+- principal 只由服务端从已认证身份映射（auth.gateway.authenticate），
+  **请求体中的 principal 一律忽略**；若出现与身份不符的 principal 仅记警告；
+- settings.AUTH_ENABLED=False 时（本地开发）回退到服务端默认身份，仍不信任客户端。
 
 结构化日志：所有访问日志与业务日志均输出单行 JSON，request_id 由
 X-Request-ID 请求头（或服务端生成）贯穿请求处理与审计链路。
@@ -22,6 +32,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from audit.logging import get_logger, get_request_id, set_request_context, setup_logging
+from auth.errors import AuthenticationError
+from auth.gateway import AuthContext, authenticate, create_session, default_identity_store
+from auth.session import default_session_store
+from auth.tokens import create_token
 from config import settings
 from web.service import ensure_db, run_query
 
@@ -36,6 +50,7 @@ MIME = {
 }
 
 _access_logger = get_logger("web.access")
+_auth_logger = get_logger("web.auth")
 
 
 def _level_from_str(level: str) -> int:
@@ -46,12 +61,14 @@ def _level_from_str(level: str) -> int:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send_json(self, obj: dict, code: int = 200) -> None:
+    def _send_json(self, obj: dict, code: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Request-ID", get_request_id())
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -69,12 +86,44 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ------------------------------------------------------------------ #
+    # 请求工具
+    # ------------------------------------------------------------------ #
+    def _read_body(self) -> dict | None:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length) if length else b""
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+
+    def _authenticate(self) -> AuthContext | None:
+        """从请求头解析身份；失败时返回 None（调用方负责 401 响应）。"""
+        try:
+            return authenticate(self.headers)
+        except AuthenticationError as exc:
+            _auth_logger.warning(
+                "auth_failed",
+                extra={"event": "auth_failed", "error": str(exc)},
+            )
+            return None
+
+    @staticmethod
+    def _session_cookie(session_id: str, max_age: int) -> str:
+        """构造 HttpOnly 会话 Cookie（浏览器无 JS 也能维持登录态）。"""
+        return f"session={session_id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}"
+
+    # ------------------------------------------------------------------ #
+    # 公开路由
+    # ------------------------------------------------------------------ #
     def do_GET(self) -> None:
         # 每个请求入口注入结构化日志上下文（request_id 贯穿）
         set_request_context(request_id=self.headers.get("X-Request-ID"))
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
             return self._send_json({"status": "ok"})
+        if parsed.path == "/api/auth/me":
+            return self._get_me()
         if parsed.path in ("/", "/index.html"):
             return self._send_file("index.html")
         rel = parsed.path[len("/static/") :] if parsed.path.startswith("/static/") else ""
@@ -83,30 +132,141 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         set_request_context(request_id=self.headers.get("X-Request-ID"))
         parsed = urlparse(self.path)
-        if parsed.path != "/api/query":
-            return self._send_json({"error": "not found"}, 404)
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length) if length else b""
+        if parsed.path == "/api/auth/login":
+            return self._post_login()
+        if parsed.path == "/api/auth/logout":
+            return self._post_logout()
+        if parsed.path == "/api/query":
+            return self._post_query()
+        return self._send_json({"error": "not found"}, 404)
+
+    # ------------------------------------------------------------------ #
+    # 认证端点
+    # ------------------------------------------------------------------ #
+    def _get_me(self) -> None:
+        """返回当前登录身份；未登录返回 401（前端据此切换到登录态）。"""
+        ctx = self._authenticate()
+        if ctx is None:
+            return self._send_json({"error": "unauthorized"}, 401)
+        set_request_context(request_id=self.headers.get("X-Request-ID"), user=ctx.username)
+        return self._send_json(ctx.to_dict())
+
+    def _post_login(self) -> None:
+        """登录：校验用户名/口令 -> 签发 JWT + 服务端会话。
+
+        返回：token（JWT，供 Authorization: Bearer 使用）、session_id、
+        expires_in、user（username/display_name/principal/roles/auth_type）。
+        """
+        body = self._read_body()
+        if body is None:
+            return self._send_json({"error": "invalid json"}, 400)
+        username = str(body.get("username", "")).strip()
+        password = str(body.get("password", ""))
+        if not username or not password:
+            return self._send_json({"error": "username and password are required"}, 400)
+
+        store = default_identity_store()
         try:
-            body = json.loads(raw.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            user = store.authenticate(username, password)
+        except AuthenticationError as exc:
+            _auth_logger.warning(
+                "login_failed", extra={"event": "login_failed", "username": username}
+            )
+            return self._send_json({"error": str(exc)}, 401)
+
+        token = create_token(
+            user.username,
+            settings.AUTH_JWT_SECRET,
+            issuer=settings.AUTH_JWT_ISSUER,
+            audience=settings.AUTH_JWT_AUDIENCE,
+            ttl_seconds=settings.AUTH_JWT_TTL,
+        )
+        session = create_session(user)
+        set_request_context(request_id=self.headers.get("X-Request-ID"), user=user.username)
+        _auth_logger.info(
+            "login_ok",
+            extra={"event": "login_ok", "username": user.username, "principal": user.principal},
+        )
+        return self._send_json(
+            {
+                "token": token,
+                "session_id": session.session_id,
+                "expires_in": settings.AUTH_JWT_TTL,
+                "user": {
+                    "username": user.username,
+                    "display_name": user.display_name,
+                    "principal": user.principal,
+                    "roles": sorted(user.roles),
+                    "auth_type": "jwt",
+                },
+            },
+            headers={
+                "Set-Cookie": self._session_cookie(session.session_id, settings.AUTH_SESSION_TTL)
+            },
+        )
+
+    def _post_logout(self) -> None:
+        """登出：吊销服务端会话（X-Session-ID 或 session Cookie）。"""
+        sid = self.headers.get("X-Session-ID") or _cookie_session_id(self.headers.get("Cookie"))
+        if sid:
+            revoked = default_session_store().revoke(sid)
+        else:
+            revoked = False
+        return self._send_json(
+            {"ok": True, "revoked": revoked},
+            headers={"Set-Cookie": self._session_cookie("", 0)},
+        )
+
+    # ------------------------------------------------------------------ #
+    # 受保护：/api/query
+    # ------------------------------------------------------------------ #
+    def _post_query(self) -> None:
+        """完整链路查询。
+
+        鉴权：Bearer JWT / 会话。principal 一律取自服务端映射的身份
+        （auth.gateway），请求体中的 principal 字段被忽略（防客户端提权）。
+        """
+        ctx = self._authenticate()
+        if ctx is None:
+            return self._send_json({"error": "unauthorized"}, 401)
+
+        body = self._read_body()
+        if body is None:
             return self._send_json({"error": "invalid json"}, 400)
         query = str(body.get("query", "")).strip()
-        principal = body.get("principal") or None
         if not query:
             return self._send_json({"error": "query is required"}, 400)
+
+        # 客户端传入的 principal 一律忽略（P0：服务端强制绑定）
+        client_principal = body.get("principal")
+        if client_principal is not None and str(client_principal) != ctx.principal:
+            _auth_logger.warning(
+                "client_principal_ignored",
+                extra={
+                    "event": "client_principal_ignored",
+                    "server_principal": ctx.principal,
+                    "client_principal": str(client_principal),
+                },
+            )
+
+        set_request_context(
+            request_id=self.headers.get("X-Request-ID"),
+            session_id=ctx.session_id,
+            user=ctx.username,
+        )
         result = run_query(
             query,
-            principal,
-            request_id=body.get("request_id") or self.headers.get("X-Request-ID"),
-            session_id=body.get("session_id"),
-            user=body.get("user"),
+            ctx.principal,
+            request_id=self.headers.get("X-Request-ID"),
+            session_id=ctx.session_id,
+            user=ctx.username,
         )
+        result["auth"] = ctx.to_dict()
         return self._send_json(result)
 
+    # ------------------------------------------------------------------ #
     def log_message(self, fmt: str, *args: object) -> None:
         # 结构化访问日志（替代默认 stderr 文本；request_id 已在上下文中）
-        # BaseHTTPRequestHandler 以 log_message('"%s" %s %s', requestline, code, size) 调用。
         status = str(args[1]) if len(args) > 1 else "-"
         size = str(args[2]) if len(args) > 2 else "-"
         _access_logger.info(
@@ -122,12 +282,31 @@ class Handler(BaseHTTPRequestHandler):
         )
 
 
+def _cookie_session_id(cookie_header: str | None) -> str | None:
+    if not cookie_header:
+        return None
+    try:
+        from http.cookies import SimpleCookie
+
+        jar = SimpleCookie()
+        jar.load(cookie_header)
+        morsel = jar.get("session")
+        return morsel.value if morsel else None
+    except Exception:
+        return None
+
+
 def main() -> None:
     setup_logging(_level_from_str(settings.LOG_LEVEL))
     ensure_db()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"FutureBI Web UI running at http://127.0.0.1:{port}", flush=True)
+    auth_state = (
+        "enabled"
+        if settings.AUTH_ENABLED
+        else f"disabled (default: {settings.AUTH_DEFAULT_PRINCIPAL})"
+    )
+    print(f"FutureBI Web UI running at http://127.0.0.1:{port}  [auth={auth_state}]", flush=True)
     server.serve_forever()
 
 

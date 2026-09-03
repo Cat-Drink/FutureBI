@@ -24,6 +24,7 @@ class AuditRecord:
     prompt: str
     session_id: str | None = None
     user: str | None = None
+    principal: str | None = None
     retrieval_context: dict[str, Any] | None = None
     dsl: dict[str, Any] | None = None
     sql: str | None = None

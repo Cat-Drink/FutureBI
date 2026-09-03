@@ -1,11 +1,17 @@
-"""Prompt 模板：让 LLM 只产出受控的 QueryDSL JSON。"""
+"""Prompt 模板：让 LLM 只产出受控的 QueryDSL JSON。
+
+P0 —— 最小权限元数据注入（守卫前移）：build_* 系列接受 principal，
+把"可用字段白名单"与"口径约定"先按主体过滤后再注入 prompt。
+越权字段/口径根本不进入模型视野，而不是生成后再靠守卫拒绝。
+security.guard.apply_policy 仍保留为事后纵深防御。
+"""
 
 from __future__ import annotations
 
-SYSTEM_PROMPT = """你是企业级 ChatBI 的语义解析器。你只能输出一个 JSON 对象，表示受限查询 DSL（QueryDSL）。
-不要输出任何解释、Markdown 代码块或多余文字；不要生成 SQL；不要输出不存在的字段。
+from security.scope import scoped_field_listing, scoped_fields
 
-QueryDSL JSON 结构（所有字段必须严格符合）：
+# 固定结构说明块（与 DSL 契约一致，不随主体变化）
+_STRUCT_BLOCK = """QueryDSL JSON 结构（所有字段必须严格符合）：
 {
   "metrics": [
     {"kind": "aggregate", "field": "<逻辑字段>", "agg": "sum|count|count_distinct|avg|min|max", "alias": "<别名>"},
@@ -25,40 +31,106 @@ QueryDSL JSON 结构（所有字段必须严格符合）：
   "limit": 100,
   "fill_gaps": false,
   "top_n": {"n": 3, "partition_by": ["<维度字段>"], "order_by": [{"field": "<指标别名>", "direction": "desc"}]}
-}
+}"""
 
-可引用的逻辑字段（语义目录白名单，其余一律不得出现）：
-order_id, user_id, product_id, order_amount, discount_amount, pay_status, order_time,
-province, gender, register_time, category, brand, unit_price
+# 口径约定条目：(text, required_fields)。required_fields 中任一字段不可见，
+# 则该条约定整体不注入（防止把越权字段"教"给模型）。
+_CONVENTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        '"GMV/销售额/成交额" -> metrics=[{field:order_amount, agg:sum, alias:gmv}]',
+        ("order_amount",),
+    ),
+    (
+        '"订单数" -> metrics=[{field:order_id, agg:count, alias:order_count}]',
+        ("order_id",),
+    ),
+    (
+        '"去重用户数/活跃用户" -> metrics=[{field:user_id, agg:count_distinct, alias:active_users}]',
+        ("user_id",),
+    ),
+    (
+        '"ARPU/人均消费" -> metrics=[{kind:ratio, numerator:{field:order_amount,agg:sum,alias:gmv}, denominator:{field:user_id,agg:count_distinct,alias:active_users}, alias:arpu}]',
+        ("order_amount", "user_id"),
+    ),
+    (
+        '退款/退款率口径：仅当退款字段可见时有效。"退款率" -> ratio(退款金额/订单金额)；"退款金额" -> aggregate(退款金额求和)',
+        ("refund_amount", "order_amount"),
+    ),
+    (
+        '时间："上个月" -> relative {amount:1, unit:month, mode:calendar}；"过去N天" -> relative {amount:N, unit:day, mode:trailing}；"2024年6月" -> absolute {start:"2024-06-01", end:"2024-07-01"}（end 为下月第一天，半开区间）',
+        ("order_time",),
+    ),
+    (
+        '支付口径：问句中出现"成功/成交"时，filters 中加 {field:pay_status, operator:eq, value:SUCCESS}',
+        ("pay_status",),
+    ),
+    (
+        '维度："各品类/按品类" -> category；"品牌" -> brand；"省份/各省" -> province；"每日/按天趋势" -> dimensions=[{field:order_time}] 且 time_filter.granularity=day',
+        ("category", "brand", "province", "order_time"),
+    ),
+    (
+        '排序：出现"最高/前N个" -> order_by=[{field:<主指标别名>, direction:desc}] 且 limit=N',
+        (),
+    ),
+    (
+        '窗口函数："累计/累计值" -> metrics=[{kind:window, base:{field:<字段>,agg:<聚合>,alias:<别名>}, func:cumsum, alias:<别名>}] 且 dimensions 含 order_time；"N日移动平均" -> func:moving_avg 且 window_size=N',
+        ("order_time",),
+    ),
+    (
+        '日期补零：问句含"补零/补齐" -> fill_gaps=true（需时间维度 order_time 与明确时间窗口）',
+        ("order_time",),
+    ),
+    (
+        '分组 Top-N："每省/每品牌/每品类 ... Top N ..." -> top_n={n:N, partition_by:[<分区维度>], order_by:[{field:<指标别名>,direction:desc}]}，且 dimensions 含分区维度与排名维度',
+        ("province", "brand", "category"),
+    ),
+    (
+        '数值过滤："金额100到5000元" -> filters 中 {field:order_amount, operator:between, value:[100,5000]}',
+        ("order_amount",),
+    ),
+)
 
-语义约定：
-- "GMV/销售额/成交额" -> metrics=[{field:order_amount, agg:sum, alias:gmv}]
-- "订单数" -> metrics=[{field:order_id, agg:count, alias:order_count}]
-- "去重用户数/活跃用户" -> metrics=[{field:user_id, agg:count_distinct, alias:active_users}]
-- "ARPU/人均消费" -> metrics=[{kind:ratio, numerator:{field:order_amount,agg:sum,alias:gmv}, denominator:{field:user_id,agg:count_distinct,alias:active_users}, alias:arpu}]
-- 时间："上个月" -> relative {amount:1, unit:month, mode:calendar}；"过去N天" -> relative {amount:N, unit:day, mode:trailing}；"2024年6月" -> absolute {start:"2024-06-01", end:"2024-07-01"}（end 为下月第一天，半开区间）
-- 支付口径：问句中出现"成功/成交"时，filters 中加 {field:pay_status, operator:eq, value:SUCCESS}
-- 维度："各品类/按品类" -> category；"品牌" -> brand；"省份/各省" -> province；"每日/按天趋势" -> dimensions=[{field:order_time}] 且 time_filter.granularity=day
-- 排序：出现"最高/前N个" -> order_by=[{field:<主指标别名>, direction:desc}] 且 limit=N
-- 窗口函数："累计/累计值" -> metrics=[{kind:window, base:{field:<字段>,agg:<聚合>,alias:<别名>}, func:cumsum, alias:<别名>}] 且 dimensions 含 order_time；"N日移动平均" -> func:moving_avg 且 window_size=N
-- 日期补零：问句含"补零/补齐" -> fill_gaps=true（需时间维度 order_time 与明确时间窗口）
-- 分组 Top-N："每省/每品牌/每品类 ... Top N ..." -> top_n={n:N, partition_by:[<分区维度>], order_by:[{field:<指标别名>,direction:desc}]}，且 dimensions 含分区维度与排名维度
-- 数值过滤："金额100到5000元" -> filters 中 {field:order_amount, operator:between, value:[100,5000]}
-
-如果问题超出可控范围或缺少关键信息，输出：{"error": "无法可靠解析"}"""
+# 无论主体如何都成立的安全约束（末尾附加）
+_SAFETY_TAIL = """如果问题超出可控范围或缺少关键信息，输出：{"error": "无法可靠解析"}"""
 
 
-def build_messages(query: str) -> list[dict[str, str]]:
+def build_system_prompt(principal: str | None = None) -> str:
+    """按主体构造最小权限 System Prompt。
+
+    字段白名单 = 主体可见字段；口径约定 = 仅保留引用字段全部可见的条目。
+    """
+    allowed = scoped_fields(principal)
+    whitelist = scoped_field_listing(principal)
+    convention_lines = [
+        "- " + text for text, required in _CONVENTIONS if not required or set(required) <= allowed
+    ]
+    conventions = "\n".join(convention_lines)
+    return (
+        "你是企业级 ChatBI 的语义解析器。你只能输出一个 JSON 对象，表示受限查询 DSL（QueryDSL）。\n"
+        "不要输出任何解释、Markdown 代码块或多余文字；不要生成 SQL；不要输出不存在的字段。\n\n"
+        + _STRUCT_BLOCK
+        + "\n\n可引用的逻辑字段（当前主体可用白名单，其余一律不得出现）：\n"
+        + whitelist
+        + "\n\n语义约定：\n"
+        + conventions
+        + "\n\n"
+        + _SAFETY_TAIL
+    )
+
+
+def build_messages(query: str, principal: str | None = None) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": build_system_prompt(principal)},
         {"role": "user", "content": f"问题：{query}\n请仅输出符合上述结构的 JSON。"},
     ]
 
 
-def build_fix_messages(query: str, raw_output: str, error: str) -> list[dict[str, str]]:
+def build_fix_messages(
+    query: str, raw_output: str, error: str, principal: str | None = None
+) -> list[dict[str, str]]:
     """构造重试消息：把校验错误反馈给 LLM，要求修正。"""
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": build_system_prompt(principal)},
         {"role": "user", "content": f"问题：{query}\n请仅输出符合上述结构的 JSON。"},
         {"role": "assistant", "content": raw_output},
         {
@@ -68,14 +140,12 @@ def build_fix_messages(query: str, raw_output: str, error: str) -> list[dict[str
     ]
 
 
-def build_rewrite_messages(query: str, dsl_json: str, error: str) -> list[dict[str, str]]:
-    """构造 SQL 执行自愈消息：把精确的引擎报错反馈给 LLM，要求重写 DSL。
-
-    - dsl_json：当前（编译/执行失败）的 DSL 序列化；
-    - error：编译或执行阶段的精确报错（DuckDB Binder/Catalog/运行时错误等）。
-    """
+def build_rewrite_messages(
+    query: str, dsl_json: str, error: str, principal: str | None = None
+) -> list[dict[str, str]]:
+    """构造 SQL 执行自愈消息：把精确的引擎报错反馈给 LLM，要求重写 DSL。"""
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": build_system_prompt(principal)},
         {"role": "user", "content": f"问题：{query}\n请仅输出符合上述结构的 JSON。"},
         {"role": "assistant", "content": dsl_json},
         {

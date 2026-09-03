@@ -15,18 +15,26 @@
         <p class="tag">Spec-Driven ChatBI · 自然语言 → DSL → 确定性 SQL → 结果 → 解释 + 图表</p>
       </div>
     </div>
-    <div class="meta">DuckDB · 零裸 SQL · 零幻觉</div>
+    <div class="authbar">
+      <!-- 登录态：未登录时展示 -->
+      <form id="login-form" class="login-form">
+        <input id="username" type="text" placeholder="用户名" autocomplete="username">
+        <input id="password" type="password" placeholder="口令" autocomplete="current-password">
+        <button type="submit" id="login-btn">登录</button>
+      </form>
+      <!-- 登录态：已登录时展示 -->
+      <div id="userinfo" class="userinfo hidden">
+        <span id="display-name" class="user-name"></span>
+        <span id="principal-badge" class="principal-badge"></span>
+        <button type="button" id="logout-btn" class="ghost-btn">退出</button>
+      </div>
+    </div>
   </header>
 
   <main class="container">
     <section class="query-bar">
       <input id="query" type="text" placeholder="用自然语言提问，例如：各品类成功订单的GMV分布？"
              value="2024年6月成功订单的GMV是多少？" autocomplete="off">
-      <select id="principal" title="数据权限主体">
-        <option value="">主体：admin（无限制）</option>
-        <option value="analyst">主体：analyst（仅5省）</option>
-        <option value="restricted">主体：restricted（仅广东）</option>
-      </select>
       <button id="run" type="button">查询</button>
     </section>
 
@@ -64,7 +72,7 @@
     </section>
   </main>
 
-  <footer class="footer">FutureBI · MIT · 本地 DuckDB 沙箱 · 权限强制</footer>
+  <footer class="footer">FutureBI · MIT · 本地 DuckDB 沙箱 · 统一身份认证 + 服务端强制 principal</footer>
 
   <script src="/static/app.js"></script>
 </body>

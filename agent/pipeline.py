@@ -43,9 +43,12 @@ def _default_agent() -> object:
 def run_pipeline(query: str, principal: str | None = None) -> QueryDSL:
     """自然语言 -> QueryDSL 插槽（生产入口）。
 
-    principal 非 None 时，对生成的 DSL 施加安全守卫（表/列/行级权限）。
+    principal 非 None 时：
+    1. 守卫前移——Agent 生成阶段只注入主体可见的字段/口径元数据
+       （LLM Prompt 白名单 / 启发式字段作用域）；
+    2. 事后纵深防御——对生成的 DSL 再施加 apply_policy（表/列/行级权限）。
     """
-    dsl = _default_agent().run(query)
+    dsl = _default_agent().run(query, principal=principal)
     return apply_policy(dsl, principal)
 
 
@@ -54,14 +57,16 @@ def rewrite_dsl(
     dsl: QueryDSL,
     error: str,
     attempts: int = 1,
+    principal: str | None = None,
 ) -> QueryDSL:
     """SQL 执行自愈：把精确的编译/引擎报错喂回 LLM，重写 DSL。
 
     仅当配置了 LLM（LLMNL2DSL）时才有意义；确定性兜底会抛 PipelineError，
     由调用方透传原始执行报错。attempts 为修正轮数（至少 1 次）。
+    重写 Prompt 同样按主体过滤字段白名单（守卫前移）。
     """
     agent = _default_agent()
     rewrite = getattr(agent, "rewrite", None)
     if rewrite is None:
         raise PipelineError("当前 Agent 不支持 SQL 自愈重写")
-    return rewrite(query, dsl, error, attempts=attempts)
+    return rewrite(query, dsl, error, attempts=attempts, principal=principal)

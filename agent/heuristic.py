@@ -23,7 +23,9 @@ from typing import Any
 from agent.clarify import undefined_metric_terms
 from agent.errors import PipelineError
 from config import settings
-from semantic.dsl_schema import QueryDSL
+from security.errors import SecurityError
+from security.scope import scoped_fields
+from semantic.dsl_schema import QueryDSL, RatioMetric, WindowMetric
 
 PROVINCES = ["广东", "浙江", "江苏", "北京", "上海", "四川", "湖北", "山东"]
 CATEGORIES = ["数码", "家电", "服饰", "美妆", "食品", "家居"]
@@ -40,7 +42,8 @@ class DeterministicNL2DSL:
         """
         raise PipelineError("确定性兜底不支持 SQL 自愈重写（未配置 LLM）：" + str(error))
 
-    def run(self, query: str) -> QueryDSL:
+    def run(self, query: str, principal: str | None = None) -> QueryDSL:
+        """关键词规则 -> QueryDSL（守卫前移：生成完成前按主体过滤字段作用域）。"""
         q = query.strip()
         # 禁止静默回退默认值：未定义业务指标（如"高活用户"/"高活跃用户"）宁可拒绝，
         # 也不近似映射为已有指标（如"活跃用户"）。路由层负责主动反问，此处兜底拒绝。
@@ -76,11 +79,42 @@ class DeterministicNL2DSL:
                 dsl["fill_gaps"] = True
             if top_n:
                 dsl["top_n"] = top_n
-            return QueryDSL.model_validate(dsl)
+            parsed = QueryDSL.model_validate(dsl)
         except PipelineError:
+            raise
+        except SecurityError:
             raise
         except Exception as exc:
             raise PipelineError(f"无法解析提问: {query!r} ({exc})") from exc
+
+        # 守卫前移：生成完成前按主体过滤可用字段；越权字段直接拒绝（SecurityError）。
+        self._enforce_scope(parsed, principal)
+        return parsed
+
+    @staticmethod
+    def _enforce_scope(dsl: QueryDSL, principal: str | None) -> None:
+        """校验 DSL 引用的字段全部在主体作用域内；越权字段抛 SecurityError。
+
+        在确定性路径中，这就是"生成前"过滤：候选 DSL 尚未提交/编译即被拒绝，
+        而不是生成后靠守卫兜底（apply_policy 仍作为第二道纵深防御）。
+        """
+        allowed = scoped_fields(principal)
+        referenced: set[str] = set()
+        for m in dsl.metrics:
+            if isinstance(m, RatioMetric):
+                referenced.add(m.numerator.field)
+                referenced.add(m.denominator.field)
+            elif isinstance(m, WindowMetric):
+                referenced.add(m.base.field)
+            else:
+                referenced.add(m.field)
+        for d in dsl.dimensions:
+            referenced.add(d.field)
+        for f in dsl.filters:
+            referenced.add(f.field)
+        forbidden = referenced - allowed
+        if forbidden:
+            raise SecurityError(f"主体 {principal!r} 无权访问字段: {sorted(forbidden)}")
 
     # ------------------------------------------------------------------ #
     # 指标

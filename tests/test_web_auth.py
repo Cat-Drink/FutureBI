@@ -1,0 +1,245 @@
+"""Web 网关鉴权（P0）：登录 / 401 / 服务端强制绑定 principal / 客户端 principal 忽略。
+
+覆盖：
+- 未带凭证访问 /api/query -> 401；
+- 登录签发 JWT + 会话；错误口令 -> 401；
+- Bearer JWT / 会话 Cookie 两种凭证都可访问受保护端点；
+- 服务端从身份映射 principal：客户端请求体里的 principal 一律被忽略；
+- 受限主体（bob）查询退款 -> 无权错误（守卫前移 + 纵深防御）；
+- 登出吊销会话。
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+import urllib.error
+import urllib.request
+
+import pytest
+
+from web.server import Handler, ThreadingHTTPServer
+from web.service import ensure_db
+
+
+@pytest.fixture(scope="module")
+def warehouse():
+    """确保本地 DuckDB 数仓文件存在（HTTP 链路读取文件库）。"""
+    ensure_db()
+    return None
+
+
+def _start_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    return server, port
+
+
+def _request(port, method, path, payload=None, headers=None, timeout=10):
+    url = f"http://127.0.0.1:{port}{path}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8")), resp
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8")), exc
+
+
+def _login(port, username, password):
+    return _request(port, "POST", "/api/auth/login", {"username": username, "password": password})
+
+
+# --------------------------------------------------------------------------- #
+# 鉴权门槛
+# --------------------------------------------------------------------------- #
+def test_query_without_credentials_401():
+    server, port = _start_server()
+    try:
+        status, body, _ = _request(port, "POST", "/api/query", {"query": "GMV"})
+        assert status == 401
+        assert body["error"] == "unauthorized"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_me_without_credentials_401():
+    server, port = _start_server()
+    try:
+        status, _, _ = _request(port, "GET", "/api/auth/me")
+        assert status == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# --------------------------------------------------------------------------- #
+# 登录
+# --------------------------------------------------------------------------- #
+def test_login_success_returns_token_and_principal():
+    server, port = _start_server()
+    try:
+        status, body, _ = _login(port, "bob", "bob123")
+        assert status == 200
+        assert body["token"]
+        assert body["user"]["username"] == "bob"
+        assert body["user"]["principal"] == "restricted"
+        assert body["session_id"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_login_wrong_password_401():
+    server, port = _start_server()
+    try:
+        status, _, _ = _login(port, "bob", "wrong")
+        assert status == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_login_missing_fields_400():
+    server, port = _start_server()
+    try:
+        status, _, _ = _request(port, "POST", "/api/auth/login", {"username": "bob"})
+        assert status == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# --------------------------------------------------------------------------- #
+# 服务端强制绑定 principal：客户端 principal 一律忽略
+# --------------------------------------------------------------------------- #
+def test_query_ignores_client_principal(warehouse):
+    """bob 登录后即使请求体里写 principal=admin，服务端仍用 restricted。"""
+    server, port = _start_server()
+    try:
+        _, login, _ = _login(port, "bob", "bob123")
+        token = login["token"]
+        status, body, _ = _request(
+            port,
+            "POST",
+            "/api/query",
+            {"query": "2024年6月成功订单的GMV是多少？", "principal": "admin"},
+            {"Authorization": "Bearer " + token},
+        )
+        assert status == 200
+        assert "error" not in body
+        assert body["principal"] == "restricted"
+        assert body["auth"]["principal"] == "restricted"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_query_as_admin_via_jwt(warehouse):
+    server, port = _start_server()
+    try:
+        _, login, _ = _login(port, "admin", "admin123")
+        token = login["token"]
+        status, body, _ = _request(
+            port,
+            "POST",
+            "/api/query",
+            {"query": "2024年6月成功订单的GMV是多少？"},
+            {"Authorization": "Bearer " + token},
+        )
+        assert status == 200
+        assert body["principal"] == "admin"
+        assert body["auth"]["username"] == "admin"
+        assert body["columns"] == ["gmv"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_query_restricted_cannot_see_refund(warehouse):
+    """受限主体查询退款 -> 无权错误（守卫前移拒绝，而非事后兜底）。"""
+    server, port = _start_server()
+    try:
+        _, login, _ = _login(port, "bob", "bob123")
+        token = login["token"]
+        status, body, _ = _request(
+            port,
+            "POST",
+            "/api/query",
+            {"query": "各品类成功订单的退款金额是多少？"},
+            {"Authorization": "Bearer " + token},
+        )
+        assert status == 200
+        assert "error" in body
+        assert "无权" in body["error"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_me_returns_identity(warehouse):
+    server, port = _start_server()
+    try:
+        _, login, _ = _login(port, "analyst", "analyst123")
+        token = login["token"]
+        status, body, _ = _request(
+            port, "GET", "/api/auth/me", headers={"Authorization": "Bearer " + token}
+        )
+        assert status == 200
+        assert body["username"] == "analyst"
+        assert body["principal"] == "analyst"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# --------------------------------------------------------------------------- #
+# 会话凭证（Cookie）
+# --------------------------------------------------------------------------- #
+def test_query_via_session_cookie(warehouse):
+    server, port = _start_server()
+    try:
+        _, _, resp = _login(port, "bob", "bob123")
+        cookie = resp.headers.get("Set-Cookie", "").split(";")[0]
+        assert cookie.startswith("session=")
+        status, body, _ = _request(
+            port,
+            "POST",
+            "/api/query",
+            {"query": "2024年6月成功订单的GMV是多少？"},
+            {"Cookie": cookie},
+        )
+        assert status == 200
+        assert body["principal"] == "restricted"
+        assert body["auth"]["auth_type"] == "session"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_logout_revokes_session():
+    server, port = _start_server()
+    try:
+        _, login, _ = _login(port, "bob", "bob123")
+        sid = login["session_id"]
+        # 登出吊销会话（携带会话凭证）
+        status, body, _ = _request(port, "POST", "/api/auth/logout", headers={"X-Session-ID": sid})
+        assert status == 200
+        assert body["revoked"] is True
+        # 旧会话不再可用
+        status, body, _ = _request(
+            port,
+            "GET",
+            "/api/auth/me",
+            headers={"X-Session-ID": sid},
+        )
+        assert status == 401
+    finally:
+        server.shutdown()
+        server.server_close()

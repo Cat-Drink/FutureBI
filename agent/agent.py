@@ -59,9 +59,14 @@ class LLMNL2DSL:
         self.client = client
         self.max_retries = max_retries
 
-    def run(self, query: str) -> QueryDSL:
+    def run(self, query: str, principal: str | None = None) -> QueryDSL:
+        """生成 QueryDSL。
+
+        principal 非 None 时，Prompt 注入按主体过滤的字段白名单（守卫前移）：
+        越权字段根本不进入模型视野；生成结果仍由调用方施加 apply_policy 纵深防御。
+        """
         last_error: Exception | None = None
-        messages = build_messages(query)
+        messages = build_messages(query, principal)
         for _ in range(self.max_retries + 1):
             raw = self.client.chat(messages)
             try:
@@ -71,7 +76,7 @@ class LLMNL2DSL:
                 return QueryDSL.model_validate(obj)
             except (ValueError, TypeError, KeyError, ValidationError, PipelineError) as exc:
                 last_error = exc
-                messages = build_fix_messages(query, raw, str(exc)[:400])
+                messages = build_fix_messages(query, raw, str(exc)[:400], principal)
         raise PipelineError(
             "LLM 重试 " + str(self.max_retries) + " 次后仍无法产出合法 DSL: " + str(last_error)
         ) from last_error
@@ -82,14 +87,16 @@ class LLMNL2DSL:
         dsl: QueryDSL,
         error: str,
         attempts: int = 1,
+        principal: str | None = None,
     ) -> QueryDSL:
         """SQL 执行自愈：把精确的编译/引擎报错喂回 LLM，重写 DSL。
 
         至少调用一次 LLM（attempts >= 1）并附上 error 上下文；重写结果同样经过
         严格校验，失败时继续反馈校验错误重试。全部失败抛 PipelineError。
+        重写 Prompt 同样按主体过滤字段白名单（守卫前移）。
         """
         last_error: Exception | None = None
-        messages = build_rewrite_messages(query, dsl.model_dump(mode="json"), error)
+        messages = build_rewrite_messages(query, dsl.model_dump(mode="json"), error, principal)
         for _ in range(max(attempts, 1)):
             raw = self.client.chat(messages)
             try:
@@ -99,7 +106,7 @@ class LLMNL2DSL:
                 return QueryDSL.model_validate(obj)
             except (ValueError, TypeError, KeyError, ValidationError, PipelineError) as exc:
                 last_error = exc
-                messages = build_fix_messages(query, raw, str(exc)[:400])
+                messages = build_fix_messages(query, raw, str(exc)[:400], principal)
         raise PipelineError(
             "LLM 重写 DSL 失败（尝试 " + str(max(attempts, 1)) + " 次）: " + str(last_error)
         ) from last_error

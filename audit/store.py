@@ -16,29 +16,36 @@ import duckdb
 
 from audit.record import AuditRecord
 
-_AUDIT_DDL = """
+# audit_log 列 -> 类型（DDL 与迁移共用，保证新旧表结构一致）
+_AUDIT_COLUMN_TYPES: dict[str, str] = {
+    "request_id": "VARCHAR",
+    "session_id": "VARCHAR",
+    "user_name": "VARCHAR",
+    "principal": "VARCHAR",
+    "prompt": "VARCHAR",
+    "retrieval_context": "VARCHAR",
+    "dsl": "VARCHAR",
+    "sql": "VARCHAR",
+    "latency_ms": "DOUBLE",
+    "row_count": "BIGINT",
+    "scan_rows": "BIGINT",
+    "rewrites": "BIGINT",
+    "error": "VARCHAR",
+    "created_at": "VARCHAR",
+}
+
+_COLUMN_DEFS = ",\n".join(f"    {name:<18} {ctype}" for name, ctype in _AUDIT_COLUMN_TYPES.items())
+_AUDIT_DDL = f"""
 CREATE TABLE IF NOT EXISTS audit_log (
-    request_id        VARCHAR,
-    session_id        VARCHAR,
-    user_name         VARCHAR,
-    prompt            VARCHAR,
-    retrieval_context VARCHAR,
-    dsl               VARCHAR,
-    sql               VARCHAR,
-    latency_ms        DOUBLE,
-    row_count         BIGINT,
-    scan_rows         BIGINT,
-    rewrites          BIGINT,
-    error             VARCHAR,
-    created_at        VARCHAR
+{_COLUMN_DEFS}
 )
 """
 
 _INSERT_SQL = """
 INSERT INTO audit_log
-    (request_id, session_id, user_name, prompt, retrieval_context,
+    (request_id, session_id, user_name, principal, prompt, retrieval_context,
      dsl, sql, latency_ms, row_count, scan_rows, rewrites, error, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -77,6 +84,20 @@ class AuditStore:
         self.close()
 
     # ------------------------------------------------------------------ #
+    def _migrate_schema(self) -> None:
+        """幂等迁移：补齐旧版本 audit_log 表缺失的列（不丢历史数据）。
+
+        兼容不同时期建的表（如 scan_rows / principal 是后续版本新增列），
+        逐列对比 information_schema 后 ALTER 补齐，类型与 DDL 保持一致。
+        """
+        rows = self._conn.execute(
+            "SELECT column_name FROM information_schema.columns " "WHERE table_name = 'audit_log'"
+        ).fetchall()
+        existing = {row[0] for row in rows}
+        for column, column_type in _AUDIT_COLUMN_TYPES.items():
+            if column not in existing:
+                self._conn.execute(f'ALTER TABLE audit_log ADD COLUMN "{column}" {column_type}')
+
     def _append_jsonl(self, record: AuditRecord) -> None:
         self.jsonl_path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record.to_dict(), ensure_ascii=False)
@@ -88,12 +109,14 @@ class AuditStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = duckdb.connect(str(self.db_path))
             self._conn.execute(_AUDIT_DDL)
+            self._migrate_schema()
         self._conn.execute(
             _INSERT_SQL,
             [
                 record.request_id,
                 record.session_id,
                 record.user,
+                record.principal,
                 record.prompt,
                 _json_dump(record.retrieval_context),
                 _json_dump(record.dsl),

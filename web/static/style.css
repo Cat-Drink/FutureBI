@@ -49,17 +49,44 @@ body {
 }
 #query:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,110,247,.12); }
 
-#principal {
-  padding: 0 12px; border: 1px solid var(--border); border-radius: 10px;
-  background: var(--card); font-size: 14px; color: var(--text); outline: none;
-}
-
 #run {
   padding: 0 28px; border: none; border-radius: 10px; cursor: pointer;
   background: var(--accent); color: #fff; font-size: 15px; font-weight: 600;
 }
 #run:hover { background: var(--accent-dark); }
 #run:disabled { opacity: .6; cursor: default; }
+
+/* 统一身份认证（P0）：顶部登录栏 */
+.authbar { display: flex; align-items: center; gap: 12px; }
+
+.login-form { display: flex; gap: 8px; align-items: center; }
+.login-form input {
+  width: 130px; padding: 8px 12px; font-size: 13px;
+  border: 1px solid rgba(255,255,255,.22); border-radius: 8px;
+  background: rgba(255,255,255,.08); color: #fff; outline: none;
+}
+.login-form input::placeholder { color: #9aa1c0; }
+.login-form input:focus { border-color: var(--accent); }
+
+#login-btn {
+  padding: 8px 18px; border: none; border-radius: 8px; cursor: pointer;
+  background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
+}
+#login-btn:hover { background: var(--accent-dark); }
+#login-btn:disabled { opacity: .6; cursor: default; }
+
+.userinfo { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.user-name { color: #fff; font-weight: 600; }
+.principal-badge {
+  padding: 3px 10px; border-radius: 999px; font-size: 12px;
+  background: rgba(79,110,247,.25); color: #c9d4ff; border: 1px solid rgba(79,110,247,.45);
+  white-space: nowrap;
+}
+.ghost-btn {
+  padding: 7px 14px; border: 1px solid rgba(255,255,255,.25); border-radius: 8px;
+  background: transparent; color: #e6e8f0; font-size: 13px; cursor: pointer;
+}
+.ghost-btn:hover { background: rgba(255,255,255,.1); }
 
 .error {
   margin-bottom: 18px; padding: 13px 16px; border-radius: 10px;

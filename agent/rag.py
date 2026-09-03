@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from agent.glossary import GLOSSARY, GlossaryDoc
+from agent.glossary import GlossaryDoc, scoped_glossary
 
 
 def _bigrams(text: str) -> set[str]:
@@ -20,12 +20,17 @@ def _bigrams(text: str) -> set[str]:
     return {text[i : i + 2] for i in range(len(text) - 1)}
 
 
-def retrieve(query: str, top_k: int = 3) -> list[GlossaryDoc]:
-    """检索与 query 最相关的口径文档，按相关度降序返回至多 top_k 条。"""
+def retrieve(query: str, top_k: int = 3, principal: str | None = None) -> list[GlossaryDoc]:
+    """检索与 query 最相关的口径文档，按相关度降序返回至多 top_k 条。
+
+    principal 非 None 时按主体过滤口径文档（守卫前移）：越权指标的口径
+    文档不会出现在检索结果中。
+    """
     q = query.lower()
     q_grams = _bigrams(query)
+    corpus = scoped_glossary(principal)
     scored: list[tuple[int, int, GlossaryDoc]] = []
-    for idx, doc in enumerate(GLOSSARY):
+    for idx, doc in enumerate(corpus):
         score = 0
         for alias in doc.aliases:
             if alias.lower() in q:

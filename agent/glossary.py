@@ -96,3 +96,15 @@ METRIC_TERMS: frozenset[str] = frozenset(alias.lower() for doc in GLOSSARY for a
 OPERATOR_TERMS: frozenset[str] = frozenset(
     {"累计", "移动平均", "滑动平均", "环比", "同比", "yoy", "mom"}
 )
+
+
+def scoped_glossary(principal: str | None = None) -> tuple[GlossaryDoc, ...]:
+    """按主体过滤口径文档（守卫前移）：只保留引用字段全部可见的文档。
+
+    - principal 为 None -> 全量（库级调用向后兼容）；
+    - 如 refund_rate / refund_amount 依赖退款字段，restricted 主体不可见。
+    """
+    from security.scope import scoped_fields
+
+    allowed = scoped_fields(principal)
+    return tuple(doc for doc in GLOSSARY if set(doc.fields) <= allowed)

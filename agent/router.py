@@ -46,15 +46,18 @@ class RouteResult:
 _CHITCHAT_REPLY = "抱歉，我是数据分析助手，只能回答与业务数据相关的问题。"
 
 
-def route_query(query: str) -> RouteResult:
-    """对 query 做意图路由与语义澄清，返回可执行的下一步动作。"""
+def route_query(query: str, principal: str | None = None) -> RouteResult:
+    """对 query 做意图路由与语义澄清，返回可执行的下一步动作。
+
+    principal 非 None 时，RAG 检索的口径文档按主体过滤（守卫前移）。
+    """
     intent = classify_intent(query)
 
     if intent == Intent.CHITCHAT:
         return RouteResult(intent=intent, action=Action.CHITCHAT, message=_CHITCHAT_REPLY)
 
     if intent == Intent.RAG:
-        documents = retrieve(query)
+        documents = retrieve(query, principal=principal)
         if documents:
             return RouteResult(
                 intent=intent,

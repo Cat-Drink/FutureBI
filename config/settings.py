@@ -63,3 +63,23 @@ AUDIT_LOG_PATH: Path = AUDIT_DIR / "audit.jsonl"
 AUDIT_DB_PATH: Path = AUDIT_DIR / "audit.duckdb"
 # 结构化日志级别（web.server 启动时 setup_logging 使用）
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+# --------------------------------------------------------------------------- #
+# 统一身份认证（P0）—— 见 auth/ 包
+# --------------------------------------------------------------------------- #
+# 是否启用 HTTP 鉴权。开启后 /api/query 必须携带有效 JWT / 会话；
+# 关闭时（本地开发/演示）仍不信任客户端：一律回退到 AUTH_DEFAULT_* 的服务端默认身份。
+AUTH_ENABLED: bool = os.getenv("AUTH_ENABLED", "1").lower() not in ("0", "false", "no")
+# 鉴权关闭时使用的服务端默认身份（principal 仍由服务端决定，客户端不可覆盖）
+AUTH_DEFAULT_PRINCIPAL: str = os.getenv("AUTH_DEFAULT_PRINCIPAL", "admin")
+AUTH_DEFAULT_USER: str = os.getenv("AUTH_DEFAULT_USER", "local-dev")
+AUTH_DEFAULT_DISPLAY: str = os.getenv("AUTH_DEFAULT_DISPLAY", "本地开发者")
+# 用户注册表 JSON（存在则加载；否则使用 auth.identity.DEFAULT_USERS）
+AUTH_USERS_FILE: Path = PROJECT_ROOT / "auth" / "users.json"
+# JWT 密钥与令牌参数（生产环境务必通过环境变量注入强随机密钥）
+AUTH_JWT_SECRET: str = os.getenv("AUTH_JWT_SECRET", "dev-insecure-jwt-secret-change-me")
+AUTH_JWT_ISSUER: str = os.getenv("AUTH_JWT_ISSUER", "futurebi")
+AUTH_JWT_AUDIENCE: str = os.getenv("AUTH_JWT_AUDIENCE", "futurebi-web")
+# 令牌有效期（秒）：JWT 与 Session 各自独立
+AUTH_JWT_TTL: int = int(os.getenv("AUTH_JWT_TTL", "3600"))
+AUTH_SESSION_TTL: int = int(os.getenv("AUTH_SESSION_TTL", "86400"))

@@ -1,0 +1,22 @@
+{
+  "users": {
+    "admin": {
+      "display_name": "系统管理员",
+      "principal": "admin",
+      "roles": ["admin"],
+      "password_hash": "c51d8b1eb8b673c9c82da9525ffe83b073bc33fc99ba1018b22a98bde1ad4774"
+    },
+    "analyst": {
+      "display_name": "分析师",
+      "principal": "analyst",
+      "roles": ["analyst"],
+      "password_hash": "62ed6d0623d447181fb0d119dedb72256e3683a0516e441168cb08b33832c915"
+    },
+    "bob": {
+      "display_name": "受限运营",
+      "principal": "restricted",
+      "roles": ["ops"],
+      "password_hash": "088cf380cabf52cb62501ede585755a298b09882d8e0a84315470e395f336bff"
+    }
+  }
+}

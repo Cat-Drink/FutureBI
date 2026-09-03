@@ -228,7 +228,7 @@ python -c "from agent.pipeline import run_pipeline; from compiler.sql_compiler i
   `{dsl, sql, columns, rows, explanation, viz}`；任何阶段失败都以 `error` 字段返回；
 - `web/server.py`：HTTP 服务（`GET /`、`GET /api/health`、`POST /api/query`）；
 - `web/static/`：单页前端，支持 number/bar/pie/line 四类图表与数据表渲染，
-  内置权限主体下拉（admin/analyst/restricted）即时验证行级 RLS。
+  并内置登录态（用户名/口令 -> JWT），数据权限主体由服务端从身份映射（见 §13）。
 
 启动与访问：
 ```bash
@@ -236,11 +236,18 @@ python -m web.server 8000
 # 浏览器打开 http://127.0.0.1:8000
 ```
 
-API 示例：
+API 示例（需先登录换取 JWT；`principal` 由服务端从身份映射，客户端不再传入）：
 ```bash
+# 1) 登录换取 JWT 与会话
+curl -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"analyst","password":"analyst123"}'
+
+# 2) 携带 Bearer 令牌查询（请求体不再需要 principal）
 curl -X POST http://127.0.0.1:8000/api/query \
   -H "Content-Type: application/json" \
-  -d '{"query":"各品类成功订单的GMV分布？","principal":"analyst"}'
+  -H "Authorization: Bearer <token>" \
+  -d '{"query":"各品类成功订单的GMV分布？"}'
 ```
 
 离线自检（无需真实 Key）：`tools/mock_llm_server.py` 是本地 OpenAI 兼容
@@ -315,3 +322,54 @@ print(r.clarifications[0].term)            # 高活用户
 ```
 
 测试：`tests/test_router.py`（21 个用例），全量 `pytest` 保持绿色。
+
+
+## 13. 十期：统一身份认证 + 服务端强制绑定 principal + 守卫前移（P0，已完成）
+
+新增 `auth/` 包与 `security/scope.py`，把权限从「事后拒绝」升级为「生成前最小权限
+注入 + 事后纵深防御」的双保险，并实现标准库零依赖的 JWT / Session 鉴权网关。
+
+### 13.1 统一身份认证与 principal 服务端绑定
+
+- `auth/identity.py`：`IdentityStore` 身份库（用户 -> 角色 -> principal），口令以
+  PBKDF2-SHA256 哈希存储、恒定时间比对；用户注册表来自 `auth/users.json`
+  （缺省内置 admin/analyst/bob 三个演示用户）。
+- `auth/tokens.py`：HS256 JWT 纯标准库实现（签名 / exp / iss / aud / nbf 全校验），
+  令牌只携带 `sub`（用户名），**绝不携带 principal / role**。
+- `auth/session.py`：进程内线程安全会话存储（登出即失效，TTL 可配）。
+- `auth/gateway.py`：`authenticate(headers)` 从 `Authorization: Bearer <jwt>` 或
+  `X-Session-ID` / `session` Cookie 解析身份，并**由服务端把身份重新映射为
+  principal**（每次请求都查身份库，角色变更即时生效，绝不信任令牌 / 客户端声明）。
+
+### 13.2 API 网关强制鉴权
+
+`web/server.py` 新增端点：
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/auth/login` | POST | 用户名 / 口令 -> JWT + 会话 + `Set-Cookie` |
+| `/api/auth/logout` | POST | 吊销服务端会话 |
+| `/api/auth/me` | GET | 返回当前身份（未登录 401） |
+| `/api/query` | POST | 受保护：需 Bearer JWT / 会话；**请求体中的 `principal` 一律忽略** |
+
+`settings.AUTH_ENABLED=0`（本地开发）时仍不信任客户端，回退到 `AUTH_DEFAULT_*`
+服务端默认身份，保持「principal 永远服务端决定」的不变式。
+
+### 13.3 守卫前移：LLM 生成前最小权限元数据注入
+
+- `security/scope.py`：`scoped_fields / scoped_tables / scoped_catalog /
+  scoped_field_listing` 按主体计算可用字段 / 表子集。
+- `agent/prompts.py`：`build_system_prompt(principal)` 把**主体可见字段白名单**与
+  **仅含可见字段的口径约定**注入 Prompt —— 越权字段根本不进入模型视野。
+- `agent/glossary.py` / `agent/rag.py`：口径文档按主体过滤，restricted 看不到退款口径。
+- `agent/heuristic.py`：确定性路径在生成完成前校验字段作用域，越权字段抛
+  `SecurityError`（拒绝而非事后兜底）。
+- `agent/pipeline.py`：`run_pipeline(query, principal)` 先按主体生成，再以
+  `apply_policy` 作为第二道纵深防御。
+
+内置演示账号：`admin/admin123`（全表）、`analyst/analyst123`（全表仅 5 省 RLS）、
+`bob/bob123`（restricted：无退款表 / 无敏感列 / 仅广东）。
+
+测试：`tests/test_auth.py`、`tests/test_scope.py`、`tests/test_web_auth.py`；
+全量 `pytest`、`black --check`、`ruff check`、双模式 golden 评测保持绿色。
+
