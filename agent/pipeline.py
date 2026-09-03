@@ -1,29 +1,41 @@
-"""Agent 编排层插槽：run_pipeline(query) -> QueryDSL。
+"""Agent 编排层公共入口：run_pipeline(query) -> QueryDSL。
 
-当前脚手架阶段尚未接入 LLM，因此这里只定义稳定的接口契约：
-- 输入：自然语言提问字符串；
-- 输出：符合 semantic.dsl_schema.QueryDSL 的 Pydantic 对象；
-- 失败：抛出 PipelineError（不会返回裸 SQL）。
+自动分派：
+- 配置了 LLM_API_KEY  -> 使用 LLMNL2DSL（LLM 产出 JSON + 严格校验 + 重试）；
+- 未配置（离线）      -> 使用 DeterministicNL2DSL 启发式兜底。
 
-评测器（eval.eval_runner）在未注入真实 Agent 前，使用 golden oracle 自闭环，
-从而验证 "DSL -> SQL -> 执行结果" 的后半段链路是确定可靠的。
+两者都不允许返回裸 SQL；失败统一抛 PipelineError（拒绝而非猜测）。
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
+from agent.agent import LLMNL2DSL
+from agent.errors import PipelineError
+from agent.heuristic import DeterministicNL2DSL
+from agent.llm import OpenAICompatClient
+from config import settings
 from semantic.dsl_schema import QueryDSL
 
+__all__ = ["run_pipeline", "PipelineError"]
 
-class PipelineError(RuntimeError):
-    """Agent 无法把自然语言转成合法 DSL 时抛出。"""
+
+@lru_cache(maxsize=1)
+def _default_agent() -> object:
+    """构造默认 Agent（按配置分派，进程内缓存）。"""
+    if settings.LLM_API_KEY:
+        client = OpenAICompatClient(
+            base_url=settings.LLM_BASE_URL,
+            api_key=settings.LLM_API_KEY,
+            model=settings.LLM_MODEL,
+            temperature=settings.LLM_TEMPERATURE,
+            timeout=settings.LLM_TIMEOUT,
+        )
+        return LLMNL2DSL(client, max_retries=settings.LLM_MAX_RETRIES)
+    return DeterministicNL2DSL()
 
 
 def run_pipeline(query: str) -> QueryDSL:
-    """自然语言 -> QueryDSL 插槽。
+    """自然语言 -> QueryDSL 插槽（生产入口）。"""
+    return _default_agent().run(query)
 
-    二期接入 LLM Agent 后在此实现：由 LLM 产出 JSON，再经 QueryDSL.model_validate
-    严格校验，校验不过即拒绝（零幻觉：宁可不答，不猜 SQL）。
-    """
-    raise NotImplementedError(
-        "run_pipeline 尚未接入 LLM Agent；评测阶段请使用 eval.eval_runner 的 "
-        "golden oracle（默认已注入）"
-    )

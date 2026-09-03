@@ -1,12 +1,15 @@
-"""全局配置：项目根目录、本地 DuckDB 路径与评测锚点日期。
+"""全局配置：项目根目录、本地 DuckDB 路径、评测锚点日期与 LLM 接入。
 
 说明：
 - AS_OF_DATE 是 mock 数据生成与评测的统一时间锚点（数据与 golden 期望 SQL 均基于它），
   保证评测在任意机器、任意日期上都是确定性、可复现的。
 - 生产环境由 Agent 在 TimeFilter.reference_date 中注入"今天"，此处仅作为缺省回退。
+- LLM 相关配置全部通过环境变量注入；未配置 LLM_API_KEY 时 Agent 自动回退到
+  确定性启发式 NL2DSL（agent.heuristic），保证离线可运行、可评测。
 """
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -17,3 +20,15 @@ DB_PATH: Path = PROJECT_ROOT / "analytics_sandbox.duckdb"
 
 # 数据与评测统一锚点日期
 AS_OF_DATE: date = date(2024, 6, 30)
+
+# --------------------------------------------------------------------------- #
+# LLM（NL -> DSL）接入配置 —— 通过环境变量注入，见 .env.example
+# --------------------------------------------------------------------------- #
+# API Key；为空则 Agent 使用确定性启发式 NL2DSL 兜底
+LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
+# OpenAI 兼容的 Chat Completions 端点
+LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.0"))
+LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "60"))
+LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))

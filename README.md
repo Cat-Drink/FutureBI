@@ -33,7 +33,12 @@ FutureBI/
 │   └── catalog.py            # 逻辑字段 -> 物理表/列 受控映射
 ├── agent/                    # Agent 编排（解耦）
 │   ├── __init__.py
-│   └── pipeline.py           # run_pipeline(query) -> QueryDSL 插槽
+│   ├── pipeline.py           # run_pipeline(query) -> QueryDSL 插槽
+│   ├── agent.py              # LLMNL2DSL：JSON + 严格校验 + 失败重试
+│   ├── heuristic.py          # 确定性启发式兜底（离线可跑）
+│   ├── llm.py                # OpenAI 兼容客户端（纯标准库）
+│   ├── prompts.py            # Prompt 模板
+│   └── errors.py             # PipelineError（拒绝而非猜测）
 ├── compiler/                 # SQL 编译器（解耦）
 │   ├── __init__.py
 │   └── sql_compiler.py       # QueryDSL -> 确定性 DuckDB SQL
@@ -105,9 +110,29 @@ python -m eval.eval_runner --print-sql   # 额外打印编译 SQL
 pytest -v
 ```
 
-## 5. 后续接入 Agent
+## 5. 二期：接入真实 NL -> DSL Agent（已完成）
 
-评测器预留 `run_pipeline(query) -> QueryDSL` 插槽。接入 LLM 时：
-1. LLM 产出 JSON -> `QueryDSL.model_validate(...)` 严格校验，非法即拒绝；
-2. 将真实 Agent 实现替换 `agent/pipeline.py` 中的 `run_pipeline`；
-3. 复跑 `python -m eval.eval_runner` 即可回归验证新 Agent 的准确率。
+`agent/` 现已实现两条可插拔路径，统一暴露 `run_pipeline(query) -> QueryDSL`：
+
+| 路径 | 实现 | 触发条件 |
+| --- | --- | --- |
+| LLM Agent | `agent/agent.py` LLMNL2DSL：LLM 产出 JSON -> `QueryDSL.model_validate` 严格校验 -> 失败反馈重试（零幻觉） | 配置 `LLM_API_KEY` |
+| 启发式兜底 | `agent/heuristic.py` DeterministicNL2DSL：规则化 NL -> DSL，覆盖 golden 高频问法 | 未配置 API Key（离线可跑） |
+
+配置（复制 `.env.example` 为 `.env` 并填入 `LLM_API_KEY`）：
+```bash
+LLM_API_KEY=sk-xxx
+LLM_BASE_URL=https://api.openai.com/v1   # 支持任意 OpenAI 兼容端点
+LLM_MODEL=gpt-4o-mini
+LLM_TEMPERATURE=0.0
+LLM_MAX_RETRIES=2
+```
+
+评测可切换 run_pipeline 来源：
+```bash
+python -m eval.eval_runner                    # oracle：golden 标准答案（自闭环）
+python -m eval.eval_runner --pipeline agent   # 真实 Agent（无 Key 时启发式兜底）
+```
+
+零幻觉保障：LLM 输出先经 Pydantic 严格校验（`extra=forbid`、受限枚举），非法输出
+自动重试并反馈错误；重试耗尽即抛 `PipelineError` 拒绝回答，绝不猜测 SQL。

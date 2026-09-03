@@ -191,6 +191,12 @@ def _print_summary(summary: EvalSummary, print_sql: bool = False) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="ChatBI Golden Dataset 评测")
     parser.add_argument("--print-sql", action="store_true", help="打印每个用例的编译 SQL")
+    parser.add_argument(
+        "--pipeline",
+        choices=["oracle", "agent"],
+        default="oracle",
+        help="run_pipeline 来源：oracle=golden 标准答案（默认，自闭环）；agent=真实 Agent（无 API Key 时启发式兜底）",
+    )
     args = parser.parse_args(argv)
 
     if not settings.DB_PATH.exists():
@@ -200,7 +206,8 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = duckdb.connect(str(settings.DB_PATH), read_only=True)
     try:
-        summary = evaluate_all(conn)
+        pipeline = _production_pipeline if args.pipeline == "agent" else run_pipeline
+        summary = evaluate_all(conn, pipeline=pipeline)
     finally:
         conn.close()
 

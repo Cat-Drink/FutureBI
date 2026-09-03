@@ -115,6 +115,11 @@
       "dimensions": [],
       "filters": [
         {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        },
+        {
           "field": "province",
           "operator": "eq",
           "value": "广东"
@@ -123,17 +128,12 @@
           "field": "category",
           "operator": "eq",
           "value": "数码"
-        },
-        {
-          "field": "pay_status",
-          "operator": "eq",
-          "value": "SUCCESS"
         }
       ],
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE u.province = '广东' AND p.category = '数码' AND f.pay_status = 'SUCCESS'\nLIMIT 100"
+    "sql": "SELECT SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS' AND u.province = '广东' AND p.category = '数码'\nLIMIT 100"
   },
   {
     "id": "Q05",
