@@ -1,0 +1,70 @@
+"""Web 服务层单元测试：run_query 完整链路 + HTTP 冒烟。"""
+
+from __future__ import annotations
+
+import json
+import threading
+import urllib.request
+
+from web.server import Handler, ThreadingHTTPServer
+from web.service import run_query
+
+
+def test_run_query_number(conn):
+    """单值查询：GMV -> number 图表。"""
+    result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
+    assert "error" not in result
+    assert result["columns"] == ["gmv"]
+    assert len(result["rows"]) == 1
+    assert result["viz"]["chart"] == "number"
+    assert "求和订单金额" in result["explanation"]
+    assert "SELECT" in result["sql"]
+
+
+def test_run_query_dimension_pie(conn):
+    """单维度分组 -> pie/bar 图表 + 多行结果。"""
+    result = run_query("各品类成功订单的GMV分布？", conn=conn)
+    assert "error" not in result
+    assert result["columns"] == ["category", "gmv"]
+    assert result["viz"]["chart"] in ("pie", "bar")
+    assert result["viz"]["x"] == "category"
+    assert result["viz"]["y"] == "gmv"
+    assert len(result["rows"]) > 0
+
+
+def test_run_query_trend_line(conn):
+    """时间趋势 -> line 图表。"""
+    result = run_query("2024年6月每日成功订单GMV趋势？", conn=conn)
+    assert "error" not in result
+    assert result["viz"]["chart"] == "line"
+    assert len(result["rows"]) > 0
+
+
+def test_run_query_security_denied(conn):
+    """restricted 主体查询退款 -> 返回 error。"""
+    result = run_query("各品类成功订单的退款金额是多少？", principal="restricted", conn=conn)
+    assert "error" in result
+    assert "无权" in result["error"]
+
+
+def test_run_query_unknown_question(conn):
+    """无法解析的问题 -> 返回 error 而非抛异常。"""
+    result = run_query("今天天气怎么样", conn=conn)
+    assert "error" in result
+
+
+def test_http_smoke():
+    """启动临时 HTTP 服务，验证 /api/health 与静态页可达。"""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5) as resp:
+            assert json.loads(resp.read().decode("utf-8")) == {"status": "ok"}
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+            html = resp.read().decode("utf-8")
+        assert "FutureBI" in html
+    finally:
+        server.shutdown()
+        server.server_close()

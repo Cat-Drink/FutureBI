@@ -50,6 +50,9 @@ python -m mock.init_duckdb
 # 评测（oracle / agent 双模式）
 python -m eval.eval_runner
 python -m eval.eval_runner --pipeline agent
+
+# 启动 Web 可视化 UI（默认 8000）
+python -m web.server 8000
 ```
 
 ## 目录结构
@@ -65,6 +68,7 @@ security/   权限控制（表级/列级/行级 RLS）
 config/     全局配置
 tests/      单元测试
 tools/      本地工具（mock LLM 服务端等）
+web/        Web 可视化 UI（service + server + static 前端）
 ```
 
 ## 关键约定

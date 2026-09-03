@@ -218,6 +218,30 @@ python -c "from agent.pipeline import _default_agent; print(type(_default_agent(
 python -c "from agent.pipeline import run_pipeline; from compiler.sql_compiler import compile_sql; print(compile_sql(run_pipeline('2024年6月成功订单的总销售额是多少？')))"
 ```
 
+## 10. Web 可视化 UI（可交互界面，已完成）
+
+新增 `web/` 模块，把「自然语言 → DSL → 确定性 SQL → 结果 → 解释 + 图表」
+串成一个零依赖、可交互的 Web 界面（标准库 http.server + 原生 SVG，无前端框架）：
+
+- `web/service.py`：`run_query(query, principal, conn)` 执行完整链路，返回
+  `{dsl, sql, columns, rows, explanation, viz}`；任何阶段失败都以 `error` 字段返回；
+- `web/server.py`：HTTP 服务（`GET /`、`GET /api/health`、`POST /api/query`）；
+- `web/static/`：单页前端，支持 number/bar/pie/line 四类图表与数据表渲染，
+  内置权限主体下拉（admin/analyst/restricted）即时验证行级 RLS。
+
+启动与访问：
+```bash
+python -m web.server 8000
+# 浏览器打开 http://127.0.0.1:8000
+```
+
+API 示例：
+```bash
+curl -X POST http://127.0.0.1:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query":"各品类成功订单的GMV分布？","principal":"analyst"}'
+```
+
 离线自检（无需真实 Key）：`tools/mock_llm_server.py` 是本地 OpenAI 兼容
 Chat Completions 模拟服务，可验证客户端协议握手与围栏剥离：
 ```bash
