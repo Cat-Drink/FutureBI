@@ -6,6 +6,7 @@
 
 超出规则范围的提问会抛 PipelineError（拒绝而非猜测），与 LLM 路径行为一致。
 """
+
 from __future__ import annotations
 
 import re
@@ -41,7 +42,7 @@ class DeterministicNL2DSL:
             return QueryDSL.model_validate(dsl)
         except PipelineError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise PipelineError(f"无法解析提问: {query!r} ({exc})") from exc
 
     # ------------------------------------------------------------------ #
@@ -52,19 +53,46 @@ class DeterministicNL2DSL:
             return [
                 {
                     "kind": "ratio",
-                    "numerator": {"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"},
-                    "denominator": {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"},
+                    "numerator": {
+                        "kind": "aggregate",
+                        "field": "refund_amount",
+                        "agg": "sum",
+                        "alias": "refund_amount",
+                    },
+                    "denominator": {
+                        "kind": "aggregate",
+                        "field": "order_amount",
+                        "agg": "sum",
+                        "alias": "gmv",
+                    },
                     "alias": "refund_rate",
                 }
             ]
         if "退款金额" in q or "退款总额" in q:
-            return [{"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"}]
+            return [
+                {
+                    "kind": "aggregate",
+                    "field": "refund_amount",
+                    "agg": "sum",
+                    "alias": "refund_amount",
+                }
+            ]
         if "arpu" in q.lower() or "人均消费" in q:
             return [
                 {
                     "kind": "ratio",
-                    "numerator": {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"},
-                    "denominator": {"kind": "aggregate", "field": "user_id", "agg": "count_distinct", "alias": "active_users"},
+                    "numerator": {
+                        "kind": "aggregate",
+                        "field": "order_amount",
+                        "agg": "sum",
+                        "alias": "gmv",
+                    },
+                    "denominator": {
+                        "kind": "aggregate",
+                        "field": "user_id",
+                        "agg": "count_distinct",
+                        "alias": "active_users",
+                    },
                     "alias": "arpu",
                 }
             ]
@@ -72,11 +100,27 @@ class DeterministicNL2DSL:
         if any(k in ql for k in ("gmv", "销售额", "成交额", "成交金额", "总销售")):
             return [{"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}]
         if any(k in q for k in ("去重用户", "活跃用户")):
-            return [{"kind": "aggregate", "field": "user_id", "agg": "count_distinct", "alias": "active_users"}]
+            return [
+                {
+                    "kind": "aggregate",
+                    "field": "user_id",
+                    "agg": "count_distinct",
+                    "alias": "active_users",
+                }
+            ]
         if any(k in q for k in ("订单总数", "订单数", "订单量")):
-            return [{"kind": "aggregate", "field": "order_id", "agg": "count", "alias": "order_count"}]
+            return [
+                {"kind": "aggregate", "field": "order_id", "agg": "count", "alias": "order_count"}
+            ]
         if "客单价" in q:
-            return [{"kind": "aggregate", "field": "order_amount", "agg": "avg", "alias": "avg_order_amount"}]
+            return [
+                {
+                    "kind": "aggregate",
+                    "field": "order_amount",
+                    "agg": "avg",
+                    "alias": "avg_order_amount",
+                }
+            ]
         raise PipelineError("无法识别指标（需要 GMV/订单数/去重用户/ARPU/客单价 之一）")
 
     # ------------------------------------------------------------------ #
@@ -123,7 +167,11 @@ class DeterministicNL2DSL:
         m = re.search(r"金额?\s*(\d+)\s*到\s*(\d+)\s*元", q)
         if m:
             filters.append(
-                {"field": "order_amount", "operator": "between", "value": [int(m.group(1)), int(m.group(2))]}
+                {
+                    "field": "order_amount",
+                    "operator": "between",
+                    "value": [int(m.group(1)), int(m.group(2))],
+                }
             )
         return filters
 

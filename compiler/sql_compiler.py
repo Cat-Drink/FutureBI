@@ -7,11 +7,13 @@
 
 任何未登记字段、非法操作符都会抛出 CompileError，从机制上杜绝 SQL 注入与任意 Join。
 """
+
 from __future__ import annotations
 
 import calendar
 import math
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime
+from datetime import time as dtime
 
 from config import settings
 from semantic.catalog import (
@@ -22,15 +24,14 @@ from semantic.catalog import (
     JOIN_RULES,
 )
 from semantic.dsl_schema import (
-    AggregateMetric,
     AggFunc,
+    AggregateMetric,
     Comparison,
     Dimension,
     Filter,
     FilterOperator,
     Granularity,
     Metric,
-    OrderBy,
     QueryDSL,
     RatioMetric,
     RelativeMode,
@@ -314,7 +315,9 @@ def _compile_with_comparison(dsl: QueryDSL) -> str:
     cmp_suffix = "_mom" if tf.comparison == Comparison.MOM else "_yoy"
 
     def _window_block(label: str, start: datetime, end: datetime) -> str:
-        metrics_sql = ", ".join(f"{_metric_expr(m)[0]} AS {_metric_expr(m)[1]}" for m in dsl.metrics)
+        metrics_sql = ", ".join(
+            f"{_metric_expr(m)[0]} AS {_metric_expr(m)[1]}" for m in dsl.metrics
+        )
         where = [_filter_sql(f) for f in dsl.filters]
         s = start.strftime("%Y-%m-%d %H:%M:%S")
         e = end.strftime("%Y-%m-%d %H:%M:%S")
@@ -332,7 +335,9 @@ def _compile_with_comparison(dsl: QueryDSL) -> str:
         alias = m.alias
         selects.append(f"cur.{alias} AS {alias}")
         selects.append(f"prev.{alias} AS {alias}_prev")
-        selects.append(f"(cur.{alias} - prev.{alias}) / NULLIF(prev.{alias}, 0) AS {alias}{cmp_suffix}")
+        selects.append(
+            f"(cur.{alias} - prev.{alias}) / NULLIF(prev.{alias}, 0) AS {alias}{cmp_suffix}"
+        )
 
     sql = "WITH " + _window_block("cur", cur_start, cur_end)
     sql += ",\n" + _window_block("prev", prev_start, prev_end)
@@ -367,10 +372,7 @@ def compile_sql(dsl: QueryDSL) -> str:
     if tf is not None and tf.comparison != Comparison.NONE:
         return _compile_with_comparison(dsl)
 
-    # 1. 收集字段 -> 决定连接哪些表
-    tables = _collect_tables(dsl)
-
-    # 2. FROM + JOIN（含第二事实表受控连接）
+    # 1. FROM + JOIN（含第二事实表受控连接，由 _from_clause 内部收集表）
     from_clause = _from_clause(dsl)
 
     # 3. SELECT 列表
@@ -412,13 +414,10 @@ def compile_sql(dsl: QueryDSL) -> str:
             if o.field in metric_aliases or o.field in dim_aliases:
                 ref = o.field
             else:
-                raise CompileError(
-                    f"order_by 字段 {o.field!r} 不是指标别名或维度别名"
-                )
+                raise CompileError(f"order_by 字段 {o.field!r} 不是指标别名或维度别名")
             direction = "ASC" if o.direction == SortDirection.ASC else "DESC"
             parts.append(f"{ref} {direction}")
         sql += "\nORDER BY " + ", ".join(parts)
 
     sql += f"\nLIMIT {int(dsl.limit)}"
     return sql
-

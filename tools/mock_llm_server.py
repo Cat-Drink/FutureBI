@@ -3,6 +3,7 @@
 用法: python tools/mock_llm_server.py [端口]
 仅用于离线验证协议正确性；真实业务请配置 LLM_BASE_URL 指向真实端点。
 """
+
 from __future__ import annotations
 
 import json
@@ -43,7 +44,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self.path.endswith("/chat/completions"):
             return self._reply(404, {"error": {"message": "not found"}})
-        if "Authorization" not in self.headers or not self.headers["Authorization"].startswith("Bearer "):
+        if "Authorization" not in self.headers or not self.headers["Authorization"].startswith(
+            "Bearer "
+        ):
             return self._reply(401, {"error": {"message": "missing bearer"}})
 
         # 模拟 LLM：返回受控 DSL JSON（用 Markdown 围栏包裹，顺带验证 agent 的围栏剥离）
@@ -54,7 +57,13 @@ class Handler(BaseHTTPRequestHandler):
                 "id": "chatcmpl-mock",
                 "object": "chat.completion",
                 "model": payload.get("model", "mock"),
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
+                ],
             },
         )
 
@@ -66,4 +75,3 @@ if __name__ == "__main__":
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"mock-llm listening on http://127.0.0.1:{PORT}", flush=True)
     server.serve_forever()
-

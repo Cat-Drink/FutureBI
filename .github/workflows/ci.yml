@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Black format check
+        run: black --check .
+      - name: Ruff lint check
+        run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Rebuild mock warehouse
+        run: python -m mock.init_duckdb
+      - name: Run pytest
+        run: python -m pytest -q
+      - name: Run golden eval (oracle)
+        run: python -m eval.eval_runner
+      - name: Run golden eval (agent heuristic)
+        run: python -m eval.eval_runner --pipeline agent
+

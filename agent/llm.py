@@ -4,6 +4,7 @@
 （OpenAI / DeepSeek / Moonshot / vLLM 等）。未配置 API Key 时不会走到这里，
 Agent 会自动回退到确定性启发式实现。
 """
+
 from __future__ import annotations
 
 import json
@@ -50,12 +51,12 @@ class OpenAICompatClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.URLError as exc:  # noqa: BLE001
+        except urllib.error.URLError as exc:
             raise LLMError(f"LLM 网络/服务错误: {exc}") from exc
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:  # noqa: BLE001
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
             raise LLMError(f"LLM 响应解析失败: {exc}") from exc
 
         try:
             return data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:  # noqa: BLE001
+        except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"LLM 响应缺少 choices[0].message.content: {exc}") from exc

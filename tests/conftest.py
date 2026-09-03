@@ -1,4 +1,5 @@
 """共享 pytest fixtures：内存 DuckDB 连接 + 灌数据。"""
+
 from __future__ import annotations
 
 import sys
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from mock.init_duckdb import build_tables
+from mock.init_duckdb import build_tables  # noqa: E402  (需先注入项目根到 sys.path)
 
 
 @pytest.fixture(scope="session")

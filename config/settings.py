@@ -7,6 +7,7 @@
 - LLM 相关配置全部通过环境变量注入；未配置 LLM_API_KEY 时 Agent 自动回退到
   确定性启发式 NL2DSL（agent.heuristic），保证离线可运行、可评测。
 """
+
 from __future__ import annotations
 
 import os

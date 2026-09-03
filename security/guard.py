@@ -8,11 +8,12 @@
 
 守卫是纯函数：不修改入参 DSL，失败抛 SecurityError（拒绝而非放行）。
 """
+
 from __future__ import annotations
 
+from security.policy import POLICIES, Policy
 from semantic.catalog import COLUMNS
 from semantic.dsl_schema import Filter, QueryDSL, RatioMetric
-from security.policy import POLICIES, Policy
 
 
 class SecurityError(RuntimeError):
@@ -63,16 +64,12 @@ def apply_policy(dsl: QueryDSL, principal: str | None) -> QueryDSL:
     # 表级校验
     forbidden_tables = tables - policy.allowed_tables
     if forbidden_tables:
-        raise SecurityError(
-            f"主体 {principal!r} 无权访问表: {sorted(forbidden_tables)}"
-        )
+        raise SecurityError(f"主体 {principal!r} 无权访问表: {sorted(forbidden_tables)}")
 
     # 列级校验
     forbidden_fields = fields & policy.forbidden_columns
     if forbidden_fields:
-        raise SecurityError(
-            f"主体 {principal!r} 无权访问字段: {sorted(forbidden_fields)}"
-        )
+        raise SecurityError(f"主体 {principal!r} 无权访问字段: {sorted(forbidden_fields)}")
 
     # 行级 RLS：追加过滤条件
     if policy.row_filters:
@@ -80,4 +77,3 @@ def apply_policy(dsl: QueryDSL, principal: str | None) -> QueryDSL:
         dsl = dsl.model_copy(update={"filters": list(dsl.filters) + extra})
 
     return dsl
-

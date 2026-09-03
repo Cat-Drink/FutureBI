@@ -9,6 +9,7 @@
 
 该实现不直接接触 SQL：DSL 产出后交给 compiler 编译，从机制上杜绝注入。
 """
+
 from __future__ import annotations
 
 import json
@@ -71,4 +72,6 @@ class LLMNL2DSL:
             except (ValueError, TypeError, KeyError, ValidationError, PipelineError) as exc:
                 last_error = exc
                 messages = build_fix_messages(query, raw, str(exc)[:400])
-        raise PipelineError("LLM 重试 " + str(self.max_retries) + " 次后仍无法产出合法 DSL: " + str(last_error)) from last_error
+        raise PipelineError(
+            "LLM 重试 " + str(self.max_retries) + " 次后仍无法产出合法 DSL: " + str(last_error)
+        ) from last_error

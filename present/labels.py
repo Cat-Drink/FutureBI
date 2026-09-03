@@ -3,6 +3,7 @@
 展示层（解释 & 可视化）依赖本模块把结构化 DSL 转成人类可读中文，
 保持纯数据、确定性、无外部依赖。
 """
+
 from __future__ import annotations
 
 FIELD_LABELS: dict[str, str] = {
@@ -73,4 +74,3 @@ def value_label(field: str, value) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(mapping.get(v, str(v)) for v in value) + "]"
     return mapping.get(value, str(value))
-

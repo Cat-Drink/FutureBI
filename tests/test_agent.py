@@ -1,8 +1,8 @@
 """Agent（NL -> DSL）单元测试：启发式兜底 + LLM 编排。"""
+
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from agent.agent import LLMNL2DSL, extract_json
 from agent.errors import PipelineError
@@ -49,7 +49,9 @@ class FakeLLM:
 def test_extract_json_strips_markdown_fence():
     import json as _json
 
-    raw = _json.dumps({"metrics": [{"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}]})
+    raw = _json.dumps(
+        {"metrics": [{"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}]}
+    )
     fenced = "```json\n" + raw + "\n```"
     assert extract_json(fenced)["metrics"][0]["alias"] == "gmv"
 
@@ -73,7 +75,11 @@ def test_llm_agent_retries_then_succeeds():
 
     bad = "这不是 JSON"
     good = _json.dumps(
-        {"metrics": [{"kind": "aggregate", "field": "order_id", "agg": "count", "alias": "order_count"}]}
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_id", "agg": "count", "alias": "order_count"}
+            ]
+        }
     )
     fake = FakeLLM([bad, good])
     agent = LLMNL2DSL(fake, max_retries=2)
@@ -97,4 +103,3 @@ def test_llm_agent_rejects_error_flag():
     agent = LLMNL2DSL(fake, max_retries=0)
     with pytest.raises(PipelineError):
         agent.run("超出范围")
-

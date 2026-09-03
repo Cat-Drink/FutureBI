@@ -1,8 +1,63 @@
+# --- Python ---
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
+.installed.cfg
+*.egg
+
+# --- 虚拟环境 ---
 .venv/
 venv/
+env/
+ENV/
+
+# --- 测试 / 覆盖率 ---
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# --- 工具缓存 ---
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# --- 本地配置与密钥 ---
+.env
+.env.*
+!.env.example
+
+# --- 运行时产物（本地 DuckDB 数仓） ---
+*.duckdb
+*.duckdb.wal
 analytics_sandbox.duckdb
 analytics_sandbox.duckdb.wal
+
+# --- IDE / 编辑器 ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- 日志 ---
+*.log
+

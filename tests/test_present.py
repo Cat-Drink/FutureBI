@@ -1,4 +1,5 @@
 """展示层单元测试：DSL -> 解释 + 可视化推荐。"""
+
 from __future__ import annotations
 
 from present.explain import explain
@@ -44,12 +45,24 @@ def test_explain_dimension_and_time():
 def test_explain_ratio_metric():
     dsl = QueryDSL.model_validate(
         {
-            "metrics": [{
-                "kind": "ratio",
-                "numerator": {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"},
-                "denominator": {"kind": "aggregate", "field": "user_id", "agg": "count_distinct", "alias": "active_users"},
-                "alias": "arpu",
-            }],
+            "metrics": [
+                {
+                    "kind": "ratio",
+                    "numerator": {
+                        "kind": "aggregate",
+                        "field": "order_amount",
+                        "agg": "sum",
+                        "alias": "gmv",
+                    },
+                    "denominator": {
+                        "kind": "aggregate",
+                        "field": "user_id",
+                        "agg": "count_distinct",
+                        "alias": "active_users",
+                    },
+                    "alias": "arpu",
+                }
+            ],
         }
     )
     text = explain(dsl)
@@ -105,4 +118,3 @@ def test_viz_config_shape():
     dsl = _dsl(dimensions=[{"field": "category"}])
     cfg = viz_config(dsl, ("category", "gmv"), (("a",),))
     assert cfg == {"chart": "pie", "x": "category", "y": "gmv"}
-

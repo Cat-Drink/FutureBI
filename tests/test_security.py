@@ -1,4 +1,5 @@
 """安全守卫单元测试：表级/列级/行级 RLS + 默认无策略。"""
+
 from __future__ import annotations
 
 import pytest
@@ -23,7 +24,9 @@ def _dsl(**over):
 def test_restricted_denies_refund_table():
     """受限主体引用退款表字段 -> SecurityError。"""
     dsl = _dsl(
-        metrics=[{"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"}],
+        metrics=[
+            {"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"}
+        ],
     )
     with pytest.raises(SecurityError):
         apply_policy(dsl, "restricted")
@@ -31,7 +34,9 @@ def test_restricted_denies_refund_table():
 
 def test_admin_allows_refund_table():
     dsl = _dsl(
-        metrics=[{"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"}],
+        metrics=[
+            {"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"}
+        ],
     )
     out = apply_policy(dsl, "admin")
     assert out == dsl
@@ -42,7 +47,9 @@ def test_admin_allows_refund_table():
 # --------------------------------------------------------------------------- #
 def test_restricted_denies_discount_column():
     dsl = _dsl(
-        metrics=[{"kind": "aggregate", "field": "discount_amount", "agg": "sum", "alias": "discount"}],
+        metrics=[
+            {"kind": "aggregate", "field": "discount_amount", "agg": "sum", "alias": "discount"}
+        ],
     )
     with pytest.raises(SecurityError):
         apply_policy(dsl, "restricted")
@@ -50,7 +57,9 @@ def test_restricted_denies_discount_column():
 
 def test_analyst_allows_discount_column():
     dsl = _dsl(
-        metrics=[{"kind": "aggregate", "field": "discount_amount", "agg": "sum", "alias": "discount"}],
+        metrics=[
+            {"kind": "aggregate", "field": "discount_amount", "agg": "sum", "alias": "discount"}
+        ],
     )
     out = apply_policy(dsl, "analyst")
     assert out.metrics[0].alias == "discount"
@@ -102,4 +111,3 @@ def test_run_pipeline_accepts_principal():
     """run_pipeline(query, principal=...) 端到端：受限主体查询退款 -> 拒绝。"""
     with pytest.raises(SecurityError):
         run_pipeline("各品类成功订单的退款金额是多少？", principal="restricted")
-

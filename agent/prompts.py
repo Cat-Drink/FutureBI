@@ -1,4 +1,5 @@
 """Prompt 模板：让 LLM 只产出受控的 QueryDSL JSON。"""
+
 from __future__ import annotations
 
 SYSTEM_PROMPT = """你是企业级 ChatBI 的语义解析器。你只能输出一个 JSON 对象，表示受限查询 DSL（QueryDSL）。
@@ -47,9 +48,7 @@ def build_messages(query: str) -> list[dict[str, str]]:
     ]
 
 
-def build_fix_messages(
-    query: str, raw_output: str, error: str
-) -> list[dict[str, str]]:
+def build_fix_messages(query: str, raw_output: str, error: str) -> list[dict[str, str]]:
     """构造重试消息：把校验错误反馈给 LLM，要求修正。"""
     return [
         {"role": "system", "content": SYSTEM_PROMPT},

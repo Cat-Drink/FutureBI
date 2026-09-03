@@ -6,19 +6,40 @@ build-backend = "setuptools.build_meta"
 name = "futurebi"
 version = "0.1.0"
 description = "Spec-driven enterprise ChatBI: NL -> DSL -> deterministic SQL"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.6",
     "duckdb>=0.10",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "black>=24.0",
+    "ruff>=0.4",
 ]
 
 [tool.setuptools.packages.find]
-include = ["semantic*", "agent*", "compiler*", "eval*", "mock*", "config*"]
+include = ["semantic*", "agent*", "compiler*", "eval*", "mock*", "config*", "present*", "security*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "RUF"]
+# 中文项目：全角标点/字符被 RUF001/002/003 误判为"歧义 Unicode"，予以忽略
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.format]
+quote-style = "double"

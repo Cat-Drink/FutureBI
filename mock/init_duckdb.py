@@ -9,10 +9,11 @@
 - 写入 _field_metadata 元数据清单表；
 - 使用固定随机种子与锚点日期，保证数据可复现（任意机器结果一致）。
 """
+
 from __future__ import annotations
 
 import random
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import duckdb
@@ -75,7 +76,8 @@ def generate(seed: int = SEED) -> tuple[list, list, list, list]:
         status = "SUCCESS" if rng.random() < 0.88 else "CANCELLED"
         order_time = asof - timedelta(
             # 覆盖最近约 400 天（>1 年），使同比(yoy)/环比(mom)计算都有历史数据
-            days=rng.randint(0, 400), seconds=rng.randint(0, 86399)
+            days=rng.randint(0, 400),
+            seconds=rng.randint(0, 86399),
         )
         orders.append((oid, uid, pid, amount, discount, status, order_time))
         if status == "SUCCESS":
@@ -139,18 +141,10 @@ def build_tables(conn: duckdb.DuckDBPyConnection, seed: int = SEED) -> None:
     _ddl(conn)
     users, products, orders, refunds = generate(seed)
 
-    conn.executemany(
-        "INSERT INTO dim_user VALUES (?, ?, ?, ?)", users
-    )
-    conn.executemany(
-        "INSERT INTO dim_product VALUES (?, ?, ?, ?)", products
-    )
-    conn.executemany(
-        "INSERT INTO fact_orders VALUES (?, ?, ?, ?, ?, ?, ?)", orders
-    )
-    conn.executemany(
-        "INSERT INTO fact_refunds VALUES (?, ?, ?, ?, ?)", refunds
-    )
+    conn.executemany("INSERT INTO dim_user VALUES (?, ?, ?, ?)", users)
+    conn.executemany("INSERT INTO dim_product VALUES (?, ?, ?, ?)", products)
+    conn.executemany("INSERT INTO fact_orders VALUES (?, ?, ?, ?, ?, ?, ?)", orders)
+    conn.executemany("INSERT INTO fact_refunds VALUES (?, ?, ?, ?, ?)", refunds)
 
     _write_metadata(conn)
 
@@ -168,9 +162,7 @@ def _write_metadata(conn: duckdb.DuckDBPyConnection) -> None:
         for table, cols in FIELD_METADATA.items()
         for column, comment in cols.items()
     ]
-    conn.executemany(
-        "INSERT INTO _field_metadata VALUES (?, ?, ?)", rows
-    )
+    conn.executemany("INSERT INTO _field_metadata VALUES (?, ?, ?)", rows)
     # 表级注释也一并入库
     conn.execute("""
         CREATE TABLE _table_metadata (
@@ -178,9 +170,7 @@ def _write_metadata(conn: duckdb.DuckDBPyConnection) -> None:
             comment    VARCHAR
         )
     """)
-    conn.executemany(
-        "INSERT INTO _table_metadata VALUES (?, ?)", list(TABLE_METADATA.items())
-    )
+    conn.executemany("INSERT INTO _table_metadata VALUES (?, ?)", list(TABLE_METADATA.items()))
 
 
 def main() -> None:

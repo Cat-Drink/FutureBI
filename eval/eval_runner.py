@@ -11,18 +11,20 @@
     python -m eval.eval_runner              # 连接项目根目录的 duckdb 文件跑全量
     python -m eval.eval_runner --print-sql  # 额外打印每个用例的编译 SQL
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import duckdb
 
-from agent.pipeline import run_pipeline as _production_pipeline  # noqa: F401  (接口保留)
+from agent.pipeline import run_pipeline as _production_pipeline
 from compiler.sql_compiler import compile_sql
 from config import settings
 from semantic.dsl_schema import QueryDSL
@@ -64,9 +66,7 @@ def run_pipeline(query: str) -> QueryDSL:
 # --------------------------------------------------------------------------- #
 # 结果提取与哈希
 # --------------------------------------------------------------------------- #
-def execute(
-    conn: duckdb.DuckDBPyConnection, sql: str
-) -> tuple[tuple[str, ...], tuple[tuple, ...]]:
+def execute(conn: duckdb.DuckDBPyConnection, sql: str) -> tuple[tuple[str, ...], tuple[tuple, ...]]:
     """执行 SQL，返回 (列名元组, 行元组)。"""
     cur = conn.execute(sql)
     columns = tuple(d[0] for d in cur.description)
@@ -132,7 +132,7 @@ def evaluate_case(
     try:
         # 1. 结构断言：run_pipeline 返回的 DSL 与预期一致
         actual_dsl = pipeline(question)
-        report.dsl_ok = (actual_dsl == expected_dsl)
+        report.dsl_ok = actual_dsl == expected_dsl
 
         # 2. 编译 DSL -> SQL
         compiled_sql = compile_sql(actual_dsl)
@@ -146,7 +146,7 @@ def evaluate_case(
         c_cols, c_rows = execute(conn, compiled_sql)
         report.hash = result_hash(c_cols, c_rows)
         report.result_ok = (g_cols == c_cols) and (sorted(g_rows) == sorted(c_rows))
-    except Exception as exc:  # noqa: BLE001 - 评测要捕获并呈现单用例异常
+    except Exception as exc:  # 有意捕获任意异常，以便逐用例呈现错误
         report.error = f"{type(exc).__name__}: {exc}"
 
     return report
@@ -200,9 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not settings.DB_PATH.exists():
-        raise SystemExit(
-            f"未找到数仓文件 {settings.DB_PATH}，请先执行: python -m mock.init_duckdb"
-        )
+        raise SystemExit(f"未找到数仓文件 {settings.DB_PATH}，请先执行: python -m mock.init_duckdb")
 
     conn = duckdb.connect(str(settings.DB_PATH), read_only=True)
     try:

@@ -1,4 +1,5 @@
 """Golden Dataset 端到端评测测试。"""
+
 from __future__ import annotations
 
 from eval.eval_runner import evaluate_all, load_golden

@@ -8,6 +8,7 @@
 - 第二事实表（如 fact_refunds）通过 FACT_JOIN_RULES 受控连接，且与主事实表
   在业务上保证 1:1（每订单至多一条退款），避免一对多扇出放大聚合结果。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

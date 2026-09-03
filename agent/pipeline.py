@@ -9,6 +9,7 @@
 可选 principal 参数：在 DSL 生成后施加安全守卫（表级/列级/行级 RLS），
 见 security.guard.apply_policy。
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -21,7 +22,7 @@ from config import settings
 from security.guard import apply_policy
 from semantic.dsl_schema import QueryDSL
 
-__all__ = ["run_pipeline", "PipelineError"]
+__all__ = ["PipelineError", "run_pipeline"]
 
 
 @lru_cache(maxsize=1)
@@ -46,4 +47,3 @@ def run_pipeline(query: str, principal: str | None = None) -> QueryDSL:
     """
     dsl = _default_agent().run(query)
     return apply_policy(dsl, principal)
-

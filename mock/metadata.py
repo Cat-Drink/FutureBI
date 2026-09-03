@@ -3,6 +3,7 @@
 这份元数据既是给开发者的文档，也会被 init_duckdb.py 写入 DuckDB 的
 _field_metadata 表，供语义层 / Agent 后续消费。
 """
+
 from __future__ import annotations
 
 FIELD_METADATA: dict[str, dict[str, str]] = {

@@ -7,9 +7,10 @@
 
 策略为不可变对象，guard 施加策略后返回新 DSL，原 DSL 不受污染。
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -54,4 +55,3 @@ POLICIES: dict[str, Policy] = {
         row_filters=(_province_filter(["广东"]),),
     ),
 }
-

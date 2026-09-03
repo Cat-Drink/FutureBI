@@ -10,11 +10,12 @@
 - TimeFilter 支持相对/绝对时间跨度与同比/环比标记（comparison）；
 - Metric 通过 discriminated union 区分聚合指标与比率指标（如 ARPU）。
 """
+
 from __future__ import annotations
 
 from datetime import date
-from enum import Enum
-from typing import Annotated, Union, Literal
+from enum import StrEnum
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,13 +23,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # --------------------------------------------------------------------------- #
 # 时间相关枚举
 # --------------------------------------------------------------------------- #
-class Granularity(str, Enum):
+class Granularity(StrEnum):
     DAY = "day"
     WEEK = "week"
     MONTH = "month"
 
 
-class Comparison(str, Enum):
+class Comparison(StrEnum):
     """同比/环比标记。当前编译器仅支持 none，其余二期实现。"""
 
     NONE = "none"
@@ -36,19 +37,19 @@ class Comparison(str, Enum):
     MOM = "mom"  # 环比
 
 
-class TimeRangeType(str, Enum):
+class TimeRangeType(StrEnum):
     RELATIVE = "relative"
     ABSOLUTE = "absolute"
 
 
-class RelativeUnit(str, Enum):
+class RelativeUnit(StrEnum):
     DAY = "day"
     WEEK = "week"
     MONTH = "month"
     YEAR = "year"
 
 
-class RelativeMode(str, Enum):
+class RelativeMode(StrEnum):
     """相对窗口语义。
 
     - trailing：相对锚点向前滚动 N 个时间单位，窗口为 [锚点-N单位, 锚点)。
@@ -74,7 +75,7 @@ class AbsoluteTime(BaseModel):
     end: date
 
     @model_validator(mode="after")
-    def _check_order(self) -> "AbsoluteTime":
+    def _check_order(self) -> AbsoluteTime:
         if self.start >= self.end:
             raise ValueError("absolute.start 必须严格早于 absolute.end")
         return self
@@ -94,7 +95,7 @@ class TimeFilter(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _check_range(self) -> "TimeFilter":
+    def _check_range(self) -> TimeFilter:
         if self.range_type == TimeRangeType.RELATIVE and self.relative is None:
             raise ValueError("range_type=relative 时必须提供 relative 对象")
         if self.range_type == TimeRangeType.ABSOLUTE and self.absolute is None:
@@ -105,7 +106,7 @@ class TimeFilter(BaseModel):
 # --------------------------------------------------------------------------- #
 # 指标相关
 # --------------------------------------------------------------------------- #
-class AggFunc(str, Enum):
+class AggFunc(StrEnum):
     SUM = "sum"
     COUNT = "count"
     COUNT_DISTINCT = "count_distinct"
@@ -137,9 +138,7 @@ class RatioMetric(BaseModel):
     alias: str = Field(min_length=1)
 
 
-Metric = Annotated[
-    Union[AggregateMetric, RatioMetric], Field(discriminator="kind")
-]
+Metric = Annotated[AggregateMetric | RatioMetric, Field(discriminator="kind")]
 
 
 class Dimension(BaseModel):
@@ -152,7 +151,7 @@ class Dimension(BaseModel):
 # --------------------------------------------------------------------------- #
 # 过滤 / 排序
 # --------------------------------------------------------------------------- #
-class FilterOperator(str, Enum):
+class FilterOperator(StrEnum):
     EQ = "eq"
     NE = "ne"
     IN = "in"
@@ -163,7 +162,7 @@ class FilterOperator(str, Enum):
     BETWEEN = "between"
 
 
-FilterValue = Union[str, int, float, bool, list[Union[str, int, float, bool]]]
+FilterValue = str | int | float | bool | list[str | int | float | bool]
 
 
 class Filter(BaseModel):
@@ -174,7 +173,7 @@ class Filter(BaseModel):
     value: FilterValue
 
     @model_validator(mode="after")
-    def _check_value(self) -> "Filter":
+    def _check_value(self) -> Filter:
         if self.operator in (FilterOperator.IN, FilterOperator.BETWEEN):
             if not isinstance(self.value, list) or len(self.value) == 0:
                 raise ValueError(f"{self.operator.value} 操作要求 value 为非空列表")
@@ -186,7 +185,7 @@ class Filter(BaseModel):
         return self
 
 
-class SortDirection(str, Enum):
+class SortDirection(StrEnum):
     ASC = "asc"
     DESC = "desc"
 

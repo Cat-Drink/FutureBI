@@ -3,18 +3,19 @@
 把结构化 QueryDSL 翻译成一句中文业务话术，便于用户理解"系统到底查了什么"。
 不涉及任何 LLM，纯字符串拼接，输出稳定可测。
 """
+
 from __future__ import annotations
 
-from semantic.dsl_schema import (
-    QueryDSL,
-    RatioMetric,
-    TimeRangeType,
-)
 from present.labels import (
     agg_label,
     field_label,
     op_label,
     value_label,
+)
+from semantic.dsl_schema import (
+    QueryDSL,
+    RatioMetric,
+    TimeRangeType,
 )
 
 
@@ -89,4 +90,3 @@ def explain(dsl: QueryDSL) -> str:
 
     clauses.append(f"最多返回 {dsl.limit} 条")
     return "，".join(clauses) + "。"
-

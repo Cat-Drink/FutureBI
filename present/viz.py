@@ -6,6 +6,7 @@
 3. 单维度、单指标 -> "bar"（柱状），类别数 <= 8 可 "pie"（饼图）；
 4. 其余 -> "table"（明细表）。
 """
+
 from __future__ import annotations
 
 from semantic.dsl_schema import QueryDSL
@@ -54,4 +55,3 @@ def viz_config(
         "x": dims[0] if dims else None,
         "y": metrics[0] if metrics else None,
     }
-
