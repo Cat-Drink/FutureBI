@@ -14,7 +14,13 @@ import math
 from datetime import date, datetime, time as dtime
 
 from config import settings
-from semantic.catalog import ALIASES, COLUMNS, FACT_TABLE, JOIN_RULES
+from semantic.catalog import (
+    ALIASES,
+    COLUMNS,
+    FACT_JOIN_RULES,
+    FACT_TABLE,
+    JOIN_RULES,
+)
 from semantic.dsl_schema import (
     AggregateMetric,
     AggFunc,
@@ -274,7 +280,15 @@ def _collect_tables(dsl: QueryDSL) -> set[str]:
 def _from_clause(dsl: QueryDSL) -> str:
     tables = _collect_tables(dsl)
     sql = f"FROM {FACT_TABLE} f"
-    joins = [JOIN_RULES[t] for t in ("dim_user", "dim_product") if t in tables]
+    joins: list[str] = []
+    # 维度表受控连接
+    for dim in ("dim_user", "dim_product"):
+        if dim in tables:
+            joins.append(JOIN_RULES[dim])
+    # 第二事实表受控连接（1:1 LEFT JOIN，无扇出放大）
+    for fact, rule in FACT_JOIN_RULES.items():
+        if fact in tables:
+            joins.append(rule)
     if joins:
         sql += "\n" + "\n".join(joins)
     return sql
@@ -356,9 +370,8 @@ def compile_sql(dsl: QueryDSL) -> str:
     # 1. 收集字段 -> 决定连接哪些表
     tables = _collect_tables(dsl)
 
-    # 2. FROM + JOIN
-    from_clause = f"FROM {FACT_TABLE} f"
-    joins = [JOIN_RULES[t] for t in ("dim_user", "dim_product") if t in tables]
+    # 2. FROM + JOIN（含第二事实表受控连接）
+    from_clause = _from_clause(dsl)
 
     # 3. SELECT 列表
     granularity = tf.granularity if tf else Granularity.DAY
@@ -387,8 +400,6 @@ def compile_sql(dsl: QueryDSL) -> str:
     # 5. 组装
     sql = "SELECT " + ", ".join(selects)
     sql += "\n" + from_clause
-    if joins:
-        sql += "\n" + "\n".join(joins)
     if where:
         sql += "\nWHERE " + " AND ".join(where)
     if dim_exprs:

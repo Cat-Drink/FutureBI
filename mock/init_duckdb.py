@@ -39,8 +39,11 @@ N_PRODUCTS = 60
 N_ORDERS = 3000
 
 
-def generate(seed: int = SEED) -> tuple[list, list, list]:
-    """生成三张表的行数据，返回 (users, products, orders)。"""
+def generate(seed: int = SEED) -> tuple[list, list, list, list]:
+    """生成四张表的行数据，返回 (users, products, orders, refunds)。
+
+    注意：refunds 的随机数在 orders 之后消费，因此不改变既有订单数据。
+    """
     rng = random.Random(seed)
     asof = settings.AS_OF_DATE
 
@@ -61,6 +64,7 @@ def generate(seed: int = SEED) -> tuple[list, list, list]:
         price_map[pid] = unit_price
 
     orders: list[tuple] = []
+    refund_candidates: list[tuple] = []
     for oid in range(1, N_ORDERS + 1):
         uid = rng.randint(1, N_USERS)
         pid = rng.randint(1, N_PRODUCTS)
@@ -74,8 +78,21 @@ def generate(seed: int = SEED) -> tuple[list, list, list]:
             days=rng.randint(0, 400), seconds=rng.randint(0, 86399)
         )
         orders.append((oid, uid, pid, amount, discount, status, order_time))
+        if status == "SUCCESS":
+            refund_candidates.append((oid, amount, order_time))
 
-    return users, products, orders
+    # 退款事实表：每个成功订单约 12% 概率退款，与订单 1:1（无扇出放大）
+    refunds: list[tuple] = []
+    rid = 0
+    for oid, amount, order_time in refund_candidates:
+        if rng.random() < 0.12:
+            rid += 1
+            refund_amount = round(amount * rng.uniform(0.3, 1.0), 2)
+            refund_status = "SUCCESS" if rng.random() < 0.9 else "PENDING"
+            refund_time = order_time + timedelta(days=rng.randint(0, 7))
+            refunds.append((rid, oid, refund_amount, refund_time, refund_status))
+
+    return users, products, orders, refunds
 
 
 def _ddl(conn: duckdb.DuckDBPyConnection) -> None:
@@ -106,12 +123,21 @@ def _ddl(conn: duckdb.DuckDBPyConnection) -> None:
             order_time      TIMESTAMP
         )
     """)
+    conn.execute("""
+        CREATE TABLE fact_refunds (
+            refund_id     INTEGER PRIMARY KEY,
+            order_id      INTEGER,
+            refund_amount DOUBLE,
+            refund_time   TIMESTAMP,
+            refund_status VARCHAR
+        )
+    """)
 
 
 def build_tables(conn: duckdb.DuckDBPyConnection, seed: int = SEED) -> None:
     """在给定连接上建表并灌数据（内存连接或文件连接均可）。"""
     _ddl(conn)
-    users, products, orders = generate(seed)
+    users, products, orders, refunds = generate(seed)
 
     conn.executemany(
         "INSERT INTO dim_user VALUES (?, ?, ?, ?)", users
@@ -121,6 +147,9 @@ def build_tables(conn: duckdb.DuckDBPyConnection, seed: int = SEED) -> None:
     )
     conn.executemany(
         "INSERT INTO fact_orders VALUES (?, ?, ?, ?, ?, ?, ?)", orders
+    )
+    conn.executemany(
+        "INSERT INTO fact_refunds VALUES (?, ?, ?, ?, ?)", refunds
     )
 
     _write_metadata(conn)
@@ -162,7 +191,7 @@ def main() -> None:
         build_tables(conn)
         counts = {
             t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            for t in ("dim_user", "dim_product", "fact_orders")
+            for t in ("dim_user", "dim_product", "fact_orders", "fact_refunds")
         }
         print("[init_duckdb] 表创建完成:")
         for t, n in counts.items():

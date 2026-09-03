@@ -48,6 +48,17 @@ class DeterministicNL2DSL:
     # 指标
     # ------------------------------------------------------------------ #
     def _metrics(self, q: str) -> list[dict[str, Any]]:
+        if "退款率" in q or "退款金额/订单金额" in q:
+            return [
+                {
+                    "kind": "ratio",
+                    "numerator": {"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"},
+                    "denominator": {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"},
+                    "alias": "refund_rate",
+                }
+            ]
+        if "退款金额" in q or "退款总额" in q:
+            return [{"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"}]
         if "arpu" in q.lower() or "人均消费" in q:
             return [
                 {

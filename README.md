@@ -159,6 +159,21 @@ python -m eval.eval_runner --pipeline agent   # 真实 Agent（无 Key 时启发
 - mock 数据时间跨度从 90 天扩到约 400 天（>1 年），保证同比有历史数据；
 - golden 新增 Q11（环比）/ Q12（同比），双模式评测 12/12。
 
+## 7. 四期：多事实表语义模型（已完成）
+
+新增第二事实表 `fact_refunds`（退款表），通过 `order_id` 与主事实表
+`fact_orders` **1:1 LEFT JOIN**（每订单至多一条退款）——从业务上保证无扇出
+放大，跨事实表聚合结果正确。
+
+| 逻辑字段 | 物理位置 | 说明 |
+| --- | --- | --- |
+| `refund_id` / `refund_amount` / `refund_time` / `refund_status` | `fact_refunds` | 退款事实表字段 |
+
+- `semantic/catalog.py`：新增 `FACT_TABLES` / `FACT_JOIN_RULES`，第二事实表
+  连接由目录声明、编译器按引用自动 LEFT JOIN；
+- 支持跨事实表**比率指标**（如退款率 = `SUM(refund_amount)/SUM(order_amount)`）；
+- golden 新增 Q13（各品类退款金额）、Q14（退款率），双模式评测 14/14。
+
 验证 LLM 路径是否生效：
 ```bash
 # 返回 LLMNL2DSL 说明已启用 LLM；返回 DeterministicNL2DSL 说明在启发式兜底

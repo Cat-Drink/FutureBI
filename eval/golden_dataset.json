@@ -437,5 +437,84 @@
       "limit": 100
     },
     "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2023-06-01 00:00:00' AND f.order_time < TIMESTAMP '2023-07-01 00:00:00'\n)\nSELECT cur.gmv AS gmv, prev.gmv AS gmv_prev, (cur.gmv - prev.gmv) / NULLIF(prev.gmv, 0) AS gmv_yoy\nFROM cur, prev\nLIMIT 100"
+  },
+  {
+    "id": "Q13",
+    "question": "各品类成功订单的退款金额是多少？",
+    "scenario": "多事实表：退款金额按品类分组（fact_orders LEFT JOIN fact_refunds 1:1）",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "refund_amount",
+          "agg": "sum",
+          "alias": "refund_amount"
+        }
+      ],
+      "dimensions": [
+        {
+          "field": "category"
+        }
+      ],
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [
+        {
+          "field": "refund_amount",
+          "direction": "desc"
+        }
+      ],
+      "limit": 100
+    },
+    "sql": "SELECT p.category AS category, SUM(r.refund_amount) AS refund_amount\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nLEFT JOIN fact_refunds r ON r.order_id = f.order_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.category\nORDER BY refund_amount DESC\nLIMIT 100"
+  },
+  {
+    "id": "Q14",
+    "question": "2024年6月成功订单的退款率（退款金额/订单金额）是多少？",
+    "scenario": "多事实表比率指标：退款金额 / 订单金额（跨 fact_refunds 与 fact_orders）",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "ratio",
+          "numerator": {
+            "kind": "aggregate",
+            "field": "refund_amount",
+            "agg": "sum",
+            "alias": "refund_amount"
+          },
+          "denominator": {
+            "kind": "aggregate",
+            "field": "order_amount",
+            "agg": "sum",
+            "alias": "gmv"
+          },
+          "alias": "refund_rate"
+        }
+      ],
+      "dimensions": [],
+      "time_filter": {
+        "granularity": "day",
+        "range_type": "absolute",
+        "absolute": {
+          "start": "2024-06-01",
+          "end": "2024-07-01"
+        }
+      },
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "SELECT (SUM(r.refund_amount)) / (SUM(f.order_amount)) AS refund_rate\nFROM fact_orders f\nLEFT JOIN fact_refunds r ON r.order_id = f.order_id\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
   }
 ]

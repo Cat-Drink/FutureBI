@@ -111,3 +111,37 @@ def test_comparison_yoy_uses_year_shift():
     sql = compile_sql(dsl)
     assert "gmv_yoy" in sql
     assert "2023-06-01 00:00:00" in sql
+
+def test_multi_fact_refund_join(conn):
+    """多事实表：退款指标应触发 fact_orders LEFT JOIN fact_refunds。"""
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [{"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"}],
+            "dimensions": [{"field": "category"}],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+        }
+    )
+    sql = compile_sql(dsl)
+    assert "LEFT JOIN fact_refunds r ON r.order_id = f.order_id" in sql
+    assert "SUM(r.refund_amount) AS refund_amount" in sql
+    rows = conn.execute(sql).fetchall()
+    assert len(rows) > 0
+
+
+def test_multi_fact_ratio_refund_rate(conn):
+    """跨事实表比率：退款率 = SUM(refund_amount)/SUM(order_amount)。"""
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [{
+                "kind": "ratio",
+                "numerator": {"kind": "aggregate", "field": "refund_amount", "agg": "sum", "alias": "refund_amount"},
+                "denominator": {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"},
+                "alias": "refund_rate",
+            }],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+        }
+    )
+    sql = compile_sql(dsl)
+    assert "LEFT JOIN fact_refunds r" in sql
+    rate = conn.execute(sql).fetchone()[0]
+    assert 0 <= rate <= 1
