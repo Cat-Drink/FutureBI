@@ -63,6 +63,80 @@ class ResultLimitExceeded(SqlExecutionError):
     code = "result_limit_exceeded"
 
 
+class UnsafeSqlError(RuntimeError):
+    """SQL 未通过只读语句白名单，拒绝执行且不进入自愈。"""
+
+    code = "unsafe_sql"
+
+
+_FORBIDDEN_SQL_KEYWORDS = {
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "DROP",
+    "ALTER",
+    "CREATE",
+    "ATTACH",
+    "PRAGMA",
+}
+
+
+def _strip_sql_comments(sql: str) -> str:
+    """移除 SQL 注释，同时保留字符串内容，避免误判字面量。"""
+    out: list[str] = []
+    i = 0
+    while i < len(sql):
+        if sql.startswith("--", i):
+            i += 2
+            while i < len(sql) and sql[i] != "\n":
+                i += 1
+        elif sql.startswith("/*", i):
+            i += 2
+            while i < len(sql) and not sql.startswith("*/", i):
+                i += 1
+            i = min(i + 2, len(sql))
+        else:
+            out.append(sql[i])
+            i += 1
+    return "".join(out)
+
+
+def _sql_code_without_literals(sql: str) -> str:
+    """将单引号字符串替换为空，供语句结构检查使用。"""
+    out: list[str] = []
+    i = 0
+    while i < len(sql):
+        if sql[i] == "'":
+            i += 1
+            while i < len(sql):
+                if sql[i] == "'":
+                    if i + 1 < len(sql) and sql[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            out.append(" ")
+        else:
+            out.append(sql[i])
+            i += 1
+    return "".join(out)
+
+
+def assert_read_only_sql(sql: str) -> None:
+    """硬断言 SQL 是单条 SELECT/WITH，拒绝 DDL/DML 与多语句。"""
+    code = _sql_code_without_literals(_strip_sql_comments(sql))
+    tokens = code.strip().split()
+    if not tokens or tokens[0].upper() not in {"SELECT", "WITH"}:
+        raise UnsafeSqlError("仅允许执行 SELECT/WITH 只读查询")
+    if ";" in code:
+        raise UnsafeSqlError("拒绝执行多语句 SQL")
+    upper = code.upper()
+    for keyword in _FORBIDDEN_SQL_KEYWORDS:
+        if re.search(rf"\b{keyword}\b", upper):
+            raise UnsafeSqlError(f"检测到被禁止的 SQL 关键字: {keyword}")
+
+
 # --------------------------------------------------------------------------- #
 # 执行结果
 # --------------------------------------------------------------------------- #
@@ -168,6 +242,7 @@ def execute_sql(
     - max_scan_rows：扫描行数上限，预检超过即抛 MaxRowsScannedExceeded；
     - max_result_rows：返回行数硬上限，超过即抛 ResultLimitExceeded。
     """
+    assert_read_only_sql(sql)
     started = time.perf_counter()
     scan_rows = 0
 

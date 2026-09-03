@@ -31,7 +31,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT SUM(f.order_amount) AS gmv\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
+    "sql": "SELECT SUM(f.order_amount) AS \"gmv\"\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
   },
   {
     "id": "Q02",
@@ -61,7 +61,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT p.category AS category, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.category\nLIMIT 100"
+    "sql": "SELECT p.category AS \"category\", SUM(f.order_amount) AS \"gmv\"\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.category\nLIMIT 100"
   },
   {
     "id": "Q03",
@@ -97,7 +97,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT SUM(f.order_amount) AS gmv\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-05-01 00:00:00' AND f.order_time < TIMESTAMP '2024-06-01 00:00:00'\nLIMIT 100"
+    "sql": "SELECT SUM(f.order_amount) AS \"gmv\"\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-05-01 00:00:00' AND f.order_time < TIMESTAMP '2024-06-01 00:00:00'\nLIMIT 100"
   },
   {
     "id": "Q04",
@@ -133,7 +133,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS' AND u.province = '广东' AND p.category = '数码'\nLIMIT 100"
+    "sql": "SELECT SUM(f.order_amount) AS \"gmv\"\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS' AND u.province = '广东' AND p.category = '数码'\nLIMIT 100"
   },
   {
     "id": "Q05",
@@ -168,7 +168,7 @@
       ],
       "limit": 5
     },
-    "sql": "SELECT p.brand AS brand, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.brand\nORDER BY gmv DESC\nLIMIT 5"
+    "sql": "SELECT p.brand AS \"brand\", SUM(f.order_amount) AS \"gmv\"\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.brand\nORDER BY \"gmv\" DESC\nLIMIT 5"
   },
   {
     "id": "Q06",
@@ -211,7 +211,7 @@
       ],
       "limit": 100
     },
-    "sql": "SELECT date_trunc('day', f.order_time) AS order_time, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nGROUP BY date_trunc('day', f.order_time)\nORDER BY order_time ASC\nLIMIT 100"
+    "sql": "SELECT date_trunc('day', f.order_time) AS \"order_time\", SUM(f.order_amount) AS \"gmv\"\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nGROUP BY date_trunc('day', f.order_time)\nORDER BY \"order_time\" ASC\nLIMIT 100"
   },
   {
     "id": "Q07",
@@ -237,7 +237,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT COUNT(f.order_id) AS order_count\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS'\nLIMIT 100"
+    "sql": "SELECT COUNT(f.order_id) AS \"order_count\"\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS'\nLIMIT 100"
   },
   {
     "id": "Q08",
@@ -271,7 +271,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT COUNT(DISTINCT f.user_id) AS active_users\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
+    "sql": "SELECT COUNT(DISTINCT f.user_id) AS \"active_users\"\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
   },
   {
     "id": "Q09",
@@ -315,7 +315,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT (SUM(f.order_amount)) / (COUNT(DISTINCT f.user_id)) AS arpu\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
+    "sql": "SELECT (SUM(f.order_amount)) / (COUNT(DISTINCT f.user_id)) AS \"arpu\"\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
   },
   {
     "id": "Q10",
@@ -366,7 +366,7 @@
       ],
       "limit": 100
     },
-    "sql": "SELECT p.category AS category, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS' AND u.province IN ('广东', '浙江') AND f.order_amount BETWEEN 100.0 AND 5000.0\nGROUP BY p.category\nORDER BY gmv DESC\nLIMIT 100"
+    "sql": "SELECT p.category AS \"category\", SUM(f.order_amount) AS \"gmv\"\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS' AND u.province IN ('广东', '浙江') AND f.order_amount BETWEEN 100.0 AND 5000.0\nGROUP BY p.category\nORDER BY \"gmv\" DESC\nLIMIT 100"
   },
   {
     "id": "Q11",
@@ -401,7 +401,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-05-01 00:00:00' AND f.order_time < TIMESTAMP '2024-06-01 00:00:00'\n)\nSELECT cur.gmv AS gmv, prev.gmv AS gmv_prev, (cur.gmv - prev.gmv) / NULLIF(prev.gmv, 0) AS gmv_mom\nFROM cur, prev\nLIMIT 100"
+    "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS \"gmv\"\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS \"gmv\"\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-05-01 00:00:00' AND f.order_time < TIMESTAMP '2024-06-01 00:00:00'\n)\nSELECT cur.\"gmv\" AS \"gmv\", prev.\"gmv\" AS \"gmv_prev\", (cur.\"gmv\" - prev.\"gmv\") / NULLIF(prev.\"gmv\", 0) AS \"gmv_mom\"\nFROM cur, prev\nLIMIT 100"
   },
   {
     "id": "Q12",
@@ -436,7 +436,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2023-06-01 00:00:00' AND f.order_time < TIMESTAMP '2023-07-01 00:00:00'\n)\nSELECT cur.gmv AS gmv, prev.gmv AS gmv_prev, (cur.gmv - prev.gmv) / NULLIF(prev.gmv, 0) AS gmv_yoy\nFROM cur, prev\nLIMIT 100"
+    "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS \"gmv\"\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS \"gmv\"\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2023-06-01 00:00:00' AND f.order_time < TIMESTAMP '2023-07-01 00:00:00'\n)\nSELECT cur.\"gmv\" AS \"gmv\", prev.\"gmv\" AS \"gmv_prev\", (cur.\"gmv\" - prev.\"gmv\") / NULLIF(prev.\"gmv\", 0) AS \"gmv_yoy\"\nFROM cur, prev\nLIMIT 100"
   },
   {
     "id": "Q13",
@@ -471,7 +471,7 @@
       ],
       "limit": 100
     },
-    "sql": "SELECT p.category AS category, SUM(r.refund_amount) AS refund_amount\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nLEFT JOIN fact_refunds r ON r.order_id = f.order_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.category\nORDER BY refund_amount DESC\nLIMIT 100"
+    "sql": "SELECT p.category AS \"category\", SUM(r.refund_amount) AS \"refund_amount\"\nFROM fact_orders f\nJOIN dim_product p ON p.product_id = f.product_id\nLEFT JOIN fact_refunds r ON r.order_id = f.order_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY p.category\nORDER BY \"refund_amount\" DESC\nLIMIT 100"
   },
   {
     "id": "Q14",
@@ -515,7 +515,7 @@
       "order_by": [],
       "limit": 100
     },
-    "sql": "SELECT (SUM(r.refund_amount)) / (SUM(f.order_amount)) AS refund_rate\nFROM fact_orders f\nLEFT JOIN fact_refunds r ON r.order_id = f.order_id\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
+    "sql": "SELECT (SUM(r.refund_amount)) / (SUM(f.order_amount)) AS \"refund_rate\"\nFROM fact_orders f\nLEFT JOIN fact_refunds r ON r.order_id = f.order_id\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nLIMIT 100"
   },
   {
     "id": "Q15",
@@ -560,7 +560,7 @@
       "fill_gaps": false,
       "top_n": null
     },
-    "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS gmv, COUNT(f.order_id) AS order_count\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS gmv, COUNT(f.order_id) AS order_count\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-05-01 00:00:00' AND f.order_time < TIMESTAMP '2024-06-01 00:00:00'\n)\nSELECT cur.gmv AS gmv, prev.gmv AS gmv_prev, (cur.gmv - prev.gmv) / NULLIF(prev.gmv, 0) AS gmv_mom, cur.order_count AS order_count, prev.order_count AS order_count_prev, (cur.order_count - prev.order_count) / NULLIF(prev.order_count, 0) AS order_count_mom\nFROM cur, prev\nLIMIT 100"
+    "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS \"gmv\", COUNT(f.order_id) AS \"order_count\"\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS \"gmv\", COUNT(f.order_id) AS \"order_count\"\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-05-01 00:00:00' AND f.order_time < TIMESTAMP '2024-06-01 00:00:00'\n)\nSELECT cur.\"gmv\" AS \"gmv\", prev.\"gmv\" AS \"gmv_prev\", (cur.\"gmv\" - prev.\"gmv\") / NULLIF(prev.\"gmv\", 0) AS \"gmv_mom\", cur.\"order_count\" AS \"order_count\", prev.\"order_count\" AS \"order_count_prev\", (cur.\"order_count\" - prev.\"order_count\") / NULLIF(prev.\"order_count\", 0) AS \"order_count_mom\"\nFROM cur, prev\nLIMIT 100"
   },
   {
     "id": "Q16",
@@ -615,7 +615,7 @@
       "fill_gaps": false,
       "top_n": null
     },
-    "sql": "SELECT date_trunc('day', f.order_time) AS order_time, SUM(SUM(f.order_amount)) OVER (ORDER BY date_trunc('day', f.order_time)) AS cum_gmv\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nGROUP BY date_trunc('day', f.order_time)\nORDER BY order_time ASC\nLIMIT 100"
+    "sql": "SELECT date_trunc('day', f.order_time) AS \"order_time\", SUM(SUM(f.order_amount)) OVER (ORDER BY date_trunc('day', f.order_time)) AS \"cum_gmv\"\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nGROUP BY date_trunc('day', f.order_time)\nORDER BY \"order_time\" ASC\nLIMIT 100"
   },
   {
     "id": "Q17",
@@ -670,7 +670,7 @@
       "fill_gaps": false,
       "top_n": null
     },
-    "sql": "SELECT date_trunc('day', f.order_time) AS order_time, AVG(SUM(f.order_amount)) OVER (ORDER BY date_trunc('day', f.order_time) ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS ma7_gmv\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nGROUP BY date_trunc('day', f.order_time)\nORDER BY order_time ASC\nLIMIT 100"
+    "sql": "SELECT date_trunc('day', f.order_time) AS \"order_time\", AVG(SUM(f.order_amount)) OVER (ORDER BY date_trunc('day', f.order_time) ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS \"ma7_gmv\"\nFROM fact_orders f\nWHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\nGROUP BY date_trunc('day', f.order_time)\nORDER BY \"order_time\" ASC\nLIMIT 100"
   },
   {
     "id": "Q18",
@@ -719,7 +719,7 @@
       "fill_gaps": true,
       "top_n": null
     },
-    "sql": "WITH __spine AS (\n  SELECT UNNEST(generate_series(TIMESTAMP '2024-06-01 00:00:00', TIMESTAMP '2024-06-30 00:00:00', INTERVAL 1 DAY)) AS order_time\n),\n__agg AS (\n  SELECT date_trunc('day', f.order_time) AS order_time, SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n  GROUP BY date_trunc('day', f.order_time)\n)\nSELECT s.order_time AS order_time, COALESCE(a.gmv, 0) AS gmv\nFROM __spine s\nLEFT JOIN __agg a ON a.order_time = s.order_time\nORDER BY s.order_time ASC\nLIMIT 100"
+    "sql": "WITH __spine AS (\n  SELECT UNNEST(generate_series(TIMESTAMP '2024-06-01 00:00:00', TIMESTAMP '2024-06-30 00:00:00', INTERVAL 1 DAY)) AS \"order_time\"\n),\n__agg AS (\n  SELECT date_trunc('day', f.order_time) AS \"order_time\", SUM(f.order_amount) AS \"gmv\"\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n  GROUP BY date_trunc('day', f.order_time)\n)\nSELECT s.\"order_time\" AS \"order_time\", COALESCE(a.\"gmv\", 0) AS \"gmv\"\nFROM __spine s\nLEFT JOIN __agg a ON a.\"order_time\" = s.\"order_time\"\nORDER BY s.\"order_time\" ASC\nLIMIT 100"
   },
   {
     "id": "Q19",
@@ -773,6 +773,6 @@
         ]
       }
     },
-    "sql": "SELECT province, category, gmv\nFROM (\nSELECT u.province AS province, p.category AS category, SUM(f.order_amount) AS gmv,\n         ROW_NUMBER() OVER (PARTITION BY u.province ORDER BY SUM(f.order_amount) DESC) AS __rn\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY u.province, p.category\n) AS __ranked\nWHERE __rn <= 3\nORDER BY province ASC, gmv DESC\nLIMIT 100"
+    "sql": "SELECT \"province\", \"category\", \"gmv\"\nFROM (\nSELECT u.province AS \"province\", p.category AS \"category\", SUM(f.order_amount) AS \"gmv\",\n         ROW_NUMBER() OVER (PARTITION BY u.province ORDER BY SUM(f.order_amount) DESC) AS __rn\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS'\nGROUP BY u.province, p.category\n) AS __ranked\nWHERE __rn <= 3\nORDER BY \"province\" ASC, \"gmv\" DESC\nLIMIT 100"
   }
 ]

@@ -61,6 +61,16 @@ class CompileError(ValueError):
 TIME_FIELDS = frozenset({"order_time", "refund_time", "register_time"})
 
 
+def _quote_ident(name: str) -> str:
+    """把标识符（别名/排序字段）以双引号包裹并转义内部引号，杜绝标识符注入。
+
+    alias / order_by.field 虽已在 DSL 层受 IDENTIFIER_PATTERN 约束，此处是
+    独立的第二道防线：即使未来出现绕过 Pydantic 校验的路径，裸拼的标识符
+    也只会被当作一个整体标识符，而无法改写 SQL 结构。
+    """
+    return '"' + str(name).replace('"', '""') + '"'
+
+
 # --------------------------------------------------------------------------- #
 # 时间窗口解析
 # --------------------------------------------------------------------------- #
@@ -379,9 +389,9 @@ def _compile_with_comparison(dsl: QueryDSL) -> str:
     def _window_block(label: str, start: datetime, end: datetime) -> str:
         select_items: list[str] = []
         for expr, alias in zip(dim_exprs, dim_aliases, strict=False):
-            select_items.append(f"{expr} AS {alias}")
+            select_items.append(f"{expr} AS {_quote_ident(alias)}")
         for m in dsl.metrics:
-            select_items.append(f"{_metric_expr(m)[0]} AS {_metric_expr(m)[1]}")
+            select_items.append(f"{_metric_expr(m)[0]} AS {_quote_ident(_metric_expr(m)[1])}")
         where = [_filter_sql(f) for f in dsl.filters]
         s = start.strftime("%Y-%m-%d %H:%M:%S")
         e = end.strftime("%Y-%m-%d %H:%M:%S")
@@ -399,20 +409,26 @@ def _compile_with_comparison(dsl: QueryDSL) -> str:
 
     selects: list[str] = []
     for alias in dim_aliases:
-        selects.append(f"cur.{alias} AS {alias}")
+        q = _quote_ident(alias)
+        selects.append(f"cur.{q} AS {q}")
     for m in dsl.metrics:
         alias = m.alias
-        selects.append(f"cur.{alias} AS {alias}")
-        selects.append(f"prev.{alias} AS {alias}_prev")
-        selects.append(
-            f"(cur.{alias} - prev.{alias}) / NULLIF(prev.{alias}, 0) AS {alias}{cmp_suffix}"
-        )
+        q = _quote_ident(alias)
+        q_prev = _quote_ident(alias + "_prev")
+        q_cmp = _quote_ident(alias + cmp_suffix)
+        selects.append(f"cur.{q} AS {q}")
+        selects.append(f"prev.{q} AS {q_prev}")
+        selects.append(f"(cur.{q} - prev.{q}) / NULLIF(prev.{q}, 0) AS {q_cmp}")
 
     sql = "WITH " + _window_block("cur", cur_start, cur_end)
     sql += ",\n" + _window_block("prev", prev_start, prev_end)
     sql += "\nSELECT " + ", ".join(selects)
     if dim_aliases:
-        sql += "\nFROM cur LEFT JOIN prev USING (" + ", ".join(dim_aliases) + ")"
+        sql += (
+            "\nFROM cur LEFT JOIN prev USING ("
+            + ", ".join(_quote_ident(a) for a in dim_aliases)
+            + ")"
+        )
     else:
         sql += "\nFROM cur, prev"
 
@@ -428,7 +444,7 @@ def _compile_with_comparison(dsl: QueryDSL) -> str:
             if o.field not in allowed:
                 raise CompileError(f"order_by 字段 {o.field!r} 不是维度/指标别名或对比列")
             direction = "ASC" if o.direction == SortDirection.ASC else "DESC"
-            parts.append(f"{o.field} {direction}")
+            parts.append(f"{_quote_ident(o.field)} {direction}")
         sql += "\nORDER BY " + ", ".join(parts)
 
     sql += f"\nLIMIT {int(dsl.limit)}"
@@ -485,11 +501,11 @@ def _compile_with_top_n(dsl: QueryDSL) -> str:
     inner_group: list[str] = []
     for d in dsl.dimensions:
         expr, alias = _dimension_expr(d, granularity)
-        inner_selects.append(f"{expr} AS {alias}")
+        inner_selects.append(f"{expr} AS {_quote_ident(alias)}")
         inner_group.append(expr)
     for m in dsl.metrics:
         expr, alias = _metric_expr(m)
-        inner_selects.append(f"{expr} AS {alias}")
+        inner_selects.append(f"{expr} AS {_quote_ident(alias)}")
 
     where = [_filter_sql(f) for f in dsl.filters]
     if dsl.time_filter is not None:
@@ -504,12 +520,16 @@ def _compile_with_top_n(dsl: QueryDSL) -> str:
     inner_sql += "\nGROUP BY " + ", ".join(inner_group)
 
     # 外层：去掉 __rn，过滤序号
-    outer_selects = [dim_alias_by_field[d.field] for d in dsl.dimensions]
-    outer_selects += [m.alias for m in dsl.metrics]
+    outer_selects = [_quote_ident(dim_alias_by_field[d.field]) for d in dsl.dimensions]
+    outer_selects += [_quote_ident(m.alias) for m in dsl.metrics]
 
-    outer_order = [f"{alias} ASC" for alias in partition_aliases]
+    outer_order = [f"{_quote_ident(alias)} ASC" for alias in partition_aliases]
     outer_order += [
-        (f"{o.field} ASC" if o.direction == SortDirection.ASC else f"{o.field} DESC")
+        (
+            f"{_quote_ident(o.field)} ASC"
+            if o.direction == SortDirection.ASC
+            else f"{_quote_ident(o.field)} DESC"
+        )
         for o in top.order_by
     ]
 
@@ -549,12 +569,12 @@ def _compile_with_fill_gaps(dsl: QueryDSL) -> str:
         raise CompileError(f"fill_gaps 暂不支持 granularity={granularity.value}（仅 day/month）")
 
     # 内层聚合：时间维度 + 指标（聚合/比率均可）
-    inner_selects: list[str] = [f"{time_expr} AS {time_alias}"]
+    inner_selects: list[str] = [f"{time_expr} AS {_quote_ident(time_alias)}"]
     inner_group: list[str] = [time_expr]
     metric_aliases: list[str] = []
     for m in dsl.metrics:
         expr, alias = _metric_expr(m)
-        inner_selects.append(f"{expr} AS {alias}")
+        inner_selects.append(f"{expr} AS {_quote_ident(alias)}")
         metric_aliases.append(alias)
 
     where = [_filter_sql(f) for f in dsl.filters]
@@ -566,7 +586,7 @@ def _compile_with_fill_gaps(dsl: QueryDSL) -> str:
     spine = (
         f"__spine AS (\n"
         f"  SELECT UNNEST(generate_series(TIMESTAMP '{start_s}', TIMESTAMP '{end_incl_s}', {step})) "
-        f"AS {time_alias}\n"
+        f"AS {_quote_ident(time_alias)}\n"
         ")"
     )
     agg = (
@@ -579,14 +599,16 @@ def _compile_with_fill_gaps(dsl: QueryDSL) -> str:
     )
 
     # 外层：spine LEFT JOIN agg，指标 COALESCE 为 0
-    outer_selects: list[str] = [f"s.{time_alias} AS {time_alias}"]
+    outer_selects: list[str] = [f"s.{_quote_ident(time_alias)} AS {_quote_ident(time_alias)}"]
     for alias in metric_aliases:
-        outer_selects.append(f"COALESCE(a.{alias}, 0) AS {alias}")
+        q = _quote_ident(alias)
+        outer_selects.append(f"COALESCE(a.{q}, 0) AS {q}")
 
     sql = "WITH " + spine + ",\n" + agg
     sql += "\nSELECT " + ", ".join(outer_selects)
-    sql += f"\nFROM __spine s\nLEFT JOIN __agg a ON a.{time_alias} = s.{time_alias}"
-    sql += f"\nORDER BY s.{time_alias} ASC"
+    qt = _quote_ident(time_alias)
+    sql += f"\nFROM __spine s\nLEFT JOIN __agg a ON a.{qt} = s.{qt}"
+    sql += f"\nORDER BY s.{qt} ASC"
     sql += f"\nLIMIT {int(dsl.limit)}"
     return sql
 
@@ -626,7 +648,7 @@ def compile_sql(dsl: QueryDSL) -> str:
     time_dim_expr: str | None = None
     for d in dsl.dimensions:
         expr, alias = _dimension_expr(d, granularity)
-        selects.append(f"{expr} AS {alias}")
+        selects.append(f"{expr} AS {_quote_ident(alias)}")
         dim_exprs.append(expr)
         dim_aliases.add(alias)
         if d.field in TIME_FIELDS:
@@ -641,7 +663,7 @@ def compile_sql(dsl: QueryDSL) -> str:
             alias = m.alias
         else:
             expr, alias = _metric_expr(m)
-        selects.append(f"{expr} AS {alias}")
+        selects.append(f"{expr} AS {_quote_ident(alias)}")
         metric_aliases.add(alias)
 
     where: list[str] = []
@@ -665,7 +687,7 @@ def compile_sql(dsl: QueryDSL) -> str:
             else:
                 raise CompileError(f"order_by 字段 {o.field!r} 不是指标别名或维度别名")
             direction = "ASC" if o.direction == SortDirection.ASC else "DESC"
-            parts.append(f"{ref} {direction}")
+            parts.append(f"{_quote_ident(ref)} {direction}")
         sql += "\nORDER BY " + ", ".join(parts)
 
     sql += f"\nLIMIT {int(dsl.limit)}"

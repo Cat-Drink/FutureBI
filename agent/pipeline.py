@@ -17,12 +17,12 @@ from functools import lru_cache
 from agent.agent import LLMNL2DSL
 from agent.errors import PipelineError
 from agent.heuristic import DeterministicNL2DSL
-from agent.llm import OpenAICompatClient
+from agent.llm import LLMError, OpenAICompatClient
 from config import settings
 from security.guard import apply_policy
 from semantic.dsl_schema import QueryDSL
 
-__all__ = ["PipelineError", "run_pipeline"]
+__all__ = ["PipelineError", "run_pipeline", "run_pipeline_with_status"]
 
 
 @lru_cache(maxsize=1)
@@ -40,16 +40,21 @@ def _default_agent() -> object:
     return DeterministicNL2DSL()
 
 
-def run_pipeline(query: str, principal: str | None = None) -> QueryDSL:
-    """自然语言 -> QueryDSL 插槽（生产入口）。
+def run_pipeline_with_status(query: str, principal: str | None = None) -> tuple[QueryDSL, bool]:
+    """生成 DSL 并返回是否因 LLM 故障切换到启发式降级模式。"""
+    degraded = False
+    try:
+        dsl = _default_agent().run(query, principal=principal)
+    except LLMError:
+        dsl = DeterministicNL2DSL().run(query, principal=principal)
+        degraded = True
+    return apply_policy(dsl, principal), degraded
 
-    principal 非 None 时：
-    1. 守卫前移——Agent 生成阶段只注入主体可见的字段/口径元数据
-       （LLM Prompt 白名单 / 启发式字段作用域）；
-    2. 事后纵深防御——对生成的 DSL 再施加 apply_policy（表/列/行级权限）。
-    """
-    dsl = _default_agent().run(query, principal=principal)
-    return apply_policy(dsl, principal)
+
+def run_pipeline(query: str, principal: str | None = None) -> QueryDSL:
+    """自然语言 -> QueryDSL；LLM 网络故障时安全降级到确定性启发式。"""
+    dsl, _ = run_pipeline_with_status(query, principal)
+    return dsl
 
 
 def rewrite_dsl(

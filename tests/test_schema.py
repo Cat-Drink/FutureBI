@@ -35,6 +35,39 @@ def test_default_limit_is_100():
     assert dsl.limit == 100
 
 
+def test_alias_rejects_sql_injection_payload():
+    """P0-1：alias 必须匹配标识符白名单，注入负载直接校验失败。"""
+    with pytest.raises(ValidationError):
+        QueryDSL.model_validate(
+            _base_dsl(
+                metrics=[
+                    {
+                        "kind": "aggregate",
+                        "field": "order_amount",
+                        "agg": "sum",
+                        "alias": "gmv FROM dim_user u JOIN fact_orders f2 ON 1=1 WHERE 1=1 --",
+                    }
+                ]
+            )
+        )
+
+
+def test_order_by_field_rejects_injection():
+    """P0-1：order_by.field 同样受标识符白名单约束。"""
+    with pytest.raises(ValidationError):
+        QueryDSL.model_validate(
+            _base_dsl(order_by=[{"field": "gmv; DROP TABLE x", "direction": "desc"}])
+        )
+
+
+def test_dimension_alias_rejects_injection():
+    """P0-1：Dimension.alias 受同一白名单约束。"""
+    with pytest.raises(ValidationError):
+        QueryDSL.model_validate(
+            _base_dsl(dimensions=[{"field": "category", "alias": "cat, gmv FROM x"}])
+        )
+
+
 def test_extra_field_is_forbidden():
     with pytest.raises(ValidationError):
         QueryDSL.model_validate(_base_dsl(sneaky="injection"))

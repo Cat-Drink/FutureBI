@@ -10,6 +10,8 @@ from exec.guards import (
     QueryTimeoutError,
     ResultLimitExceeded,
     SqlExecutionError,
+    UnsafeSqlError,
+    assert_read_only_sql,
     execute_sql,
     parse_scan_rows,
 )
@@ -20,6 +22,8 @@ __all__ = [
     "QueryTimeoutError",
     "ResultLimitExceeded",
     "SqlExecutionError",
+    "UnsafeSqlError",
+    "assert_read_only_sql",
     "execute_sql",
     "parse_scan_rows",
 ]

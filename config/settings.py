@@ -76,8 +76,19 @@ AUTH_DEFAULT_USER: str = os.getenv("AUTH_DEFAULT_USER", "local-dev")
 AUTH_DEFAULT_DISPLAY: str = os.getenv("AUTH_DEFAULT_DISPLAY", "本地开发者")
 # 用户注册表 JSON（存在则加载；否则使用 auth.identity.DEFAULT_USERS）
 AUTH_USERS_FILE: Path = PROJECT_ROOT / "auth" / "users.json"
+# Web 绑定地址；非 localhost 绑定自动启用生产鉴权强校验
+WEB_HOST: str = os.getenv("WEB_HOST", "127.0.0.1")
+# 严格生产安全模式：拒绝弱 JWT 密钥与关闭鉴权
+AUTH_STRICT: bool = os.getenv("AUTH_STRICT", "0").lower() not in ("0", "false", "no")
+# 登录失败限流（P0-4）：按 用户名+IP 维度指数退避
+AUTH_LOGIN_MAX_FAILURES: int = int(os.getenv("AUTH_LOGIN_MAX_FAILURES", "5"))
+AUTH_LOGIN_BASE_SECONDS: float = float(os.getenv("AUTH_LOGIN_BASE_SECONDS", "2"))
+AUTH_LOGIN_MAX_SECONDS: float = float(os.getenv("AUTH_LOGIN_MAX_SECONDS", "300"))
 # JWT 密钥与令牌参数（生产环境务必通过环境变量注入强随机密钥）
 AUTH_JWT_SECRET: str = os.getenv("AUTH_JWT_SECRET", "dev-insecure-jwt-secret-change-me")
+WEAK_JWT_SECRETS: frozenset[str] = frozenset(
+    {"", "dev-insecure-jwt-secret-change-me", "changeme", "secret", "password"}
+)
 AUTH_JWT_ISSUER: str = os.getenv("AUTH_JWT_ISSUER", "futurebi")
 AUTH_JWT_AUDIENCE: str = os.getenv("AUTH_JWT_AUDIENCE", "futurebi-web")
 # 令牌有效期（秒）：JWT 与 Session 各自独立

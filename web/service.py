@@ -15,21 +15,52 @@ from typing import Any
 
 import duckdb
 
-from agent.pipeline import rewrite_dsl, run_pipeline
+from agent.errors import PipelineError
+from agent.pipeline import rewrite_dsl, run_pipeline_with_status
 from agent.router import Action, route_query
 from audit.logging import get_logger, set_request_context
 from audit.record import AuditRecord
 from audit.store import AuditStore
 from compiler.sql_compiler import CompileError, compile_sql
 from config import settings
-from exec.guards import SqlExecutionError, execute_sql
+from exec.guards import (
+    MaxRowsScannedExceeded,
+    QueryTimeoutError,
+    ResultLimitExceeded,
+    SqlExecutionError,
+    UnsafeSqlError,
+    execute_sql,
+)
 from present.explain import explain
 from present.viz import viz_config
+from security.errors import SecurityError
 from security.guard import apply_policy
 from semantic.catalog import COLUMNS
 from semantic.dsl_schema import QueryDSL, RatioMetric, WindowMetric
 
 logger = get_logger("web.service")
+
+
+def _friendly_error(exc: Exception) -> str:
+    """将内部异常映射为面向业务用户的安全提示。"""
+    if isinstance(exc, QueryTimeoutError):
+        return "查询超时，请缩小时间范围后重试"
+    if isinstance(exc, MaxRowsScannedExceeded):
+        return "查询范围过大，已自动中止，请缩小时间范围后重试"
+    if isinstance(exc, ResultLimitExceeded):
+        return "查询结果过多，请缩小查询范围后重试"
+    if isinstance(exc, SecurityError):
+        return "您无权查看该数据，请联系管理员确认权限"
+    if isinstance(exc, PipelineError):
+        return "暂时无法理解该问题，请补充时间范围或使用已定义的指标"
+    if isinstance(exc, UnsafeSqlError):
+        return "查询未通过安全校验，请调整问题后重试"
+    if isinstance(exc, CompileError):
+        return "查询条件无法编译，请调整指标或过滤条件后重试"
+    if isinstance(exc, SqlExecutionError):
+        return "查询执行出错，请调整条件后重试"
+    return "系统繁忙，请稍后重试"
+
 
 _default_store: AuditStore | None = None
 _store_lock = threading.Lock()
@@ -186,7 +217,9 @@ def run_query(
             result["documents"] = [d.to_dict() for d in route.documents]
             ctx_override = {"intent": "rag", "documents": [d.key for d in route.documents]}
         else:
-            dsl = run_pipeline(query, principal)
+            dsl, degraded = run_pipeline_with_status(query, principal)
+            result["degraded"] = degraded
+            result["mode"] = "degraded" if degraded else "normal"
             result["dsl"] = dsl.model_dump(mode="json")
 
             own_conn = conn is None
@@ -214,8 +247,9 @@ def run_query(
             result["explanation"] = explain(dsl)
             result["viz"] = viz_config(dsl, columns, rows)
     except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"
+        error = _friendly_error(exc)
         result["error"] = error
+        result["error_detail"] = f"{type(exc).__name__}: {exc}"
 
     latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
     if ctx_override is not None:

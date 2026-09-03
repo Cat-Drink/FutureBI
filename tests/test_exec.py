@@ -18,6 +18,7 @@ from exec.guards import (
     QueryTimeoutError,
     ResultLimitExceeded,
     SqlExecutionError,
+    UnsafeSqlError,
     execute_sql,
     parse_scan_rows,
 )
@@ -30,6 +31,40 @@ def big_conn() -> duckdb.DuckDBPyConnection:
     c.execute("CREATE TABLE big AS SELECT range AS id, (range % 7) AS grp FROM range(200000)")
     yield c
     c.close()
+
+
+def test_unsafe_sql_rejects_non_select(big_conn):
+    """P0-2：DDL/DML 语句被只读白名单硬拦截。"""
+    for sql in (
+        "DROP TABLE big",
+        "DELETE FROM big",
+        "INSERT INTO big VALUES (1)",
+        "CREATE TABLE x AS SELECT 1",
+        "ATTACH 'x.duckdb'",
+        "PRAGMA version",
+    ):
+        with pytest.raises(UnsafeSqlError):
+            execute_sql(big_conn, sql)
+
+
+def test_unsafe_sql_rejects_multi_statement(big_conn):
+    """P0-2：堆叠多语句被拒绝（DuckDB 实测可执行 SELECT 1; SELECT 2）。"""
+    with pytest.raises(UnsafeSqlError):
+        execute_sql(big_conn, "SELECT 1; SELECT 2")
+
+
+def test_unsafe_sql_allows_comment_and_with(big_conn):
+    """注释先剥离再校验；WITH 与 SELECT 正常放行。"""
+    result = execute_sql(big_conn, "-- 注释\nSELECT grp, sum(id) AS s FROM big GROUP BY grp")
+    assert result.columns == ["grp", "s"]
+    result2 = execute_sql(big_conn, "WITH t AS (SELECT 1 AS x) SELECT x FROM t")
+    assert result2.columns == ["x"]
+
+
+def test_unsafe_sql_literal_with_semicolon_is_allowed(big_conn):
+    """字符串字面量内的分号不应被误判为多语句。"""
+    result = execute_sql(big_conn, "SELECT 'a;b' AS v, grp FROM big WHERE grp = 1")
+    assert result.columns[0] == "v"
 
 
 def test_execute_sql_normal(big_conn):

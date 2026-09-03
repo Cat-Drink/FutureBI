@@ -18,7 +18,7 @@ def test_single_metric_no_dimension(conn):
         }
     )
     sql = compile_sql(dsl)
-    assert "SUM(f.order_amount) AS gmv" in sql
+    assert 'SUM(f.order_amount) AS "gmv"' in sql
     row = conn.execute(sql).fetchone()
     assert row[0] > 0
 
@@ -65,7 +65,7 @@ def test_ratio_metric(conn):
         }
     )
     sql = compile_sql(dsl)
-    assert "(SUM(f.order_amount)) / (COUNT(DISTINCT f.user_id)) AS arpu" in sql
+    assert '(SUM(f.order_amount)) / (COUNT(DISTINCT f.user_id)) AS "arpu"' in sql
     assert conn.execute(sql).fetchone()[0] > 0
 
 
@@ -157,7 +157,7 @@ def test_multi_fact_refund_join(conn):
     )
     sql = compile_sql(dsl)
     assert "LEFT JOIN fact_refunds r ON r.order_id = f.order_id" in sql
-    assert "SUM(r.refund_amount) AS refund_amount" in sql
+    assert 'SUM(r.refund_amount) AS "refund_amount"' in sql
     rows = conn.execute(sql).fetchall()
     assert len(rows) > 0
 
@@ -271,7 +271,7 @@ def test_fill_gaps_zero_fill(conn):
     )
     sql = compile_sql(dsl)
     assert "generate_series" in sql
-    assert "COALESCE(a.gmv, 0) AS gmv" in sql
+    assert 'COALESCE(a."gmv", 0) AS "gmv"' in sql
     rows = conn.execute(sql).fetchall()
     assert len(rows) == 7  # 7 个自然日，无缺失
 
@@ -396,9 +396,9 @@ def test_comparison_with_dimension_groups_and_pairs(conn):
     )
     sql = compile_sql(dsl)
     assert "GROUP BY p.category" in sql
-    assert "LEFT JOIN prev USING (category)" in sql
-    assert "cur.category AS category" in sql
-    assert "ORDER BY gmv_yoy DESC" in sql
+    assert 'LEFT JOIN prev USING ("category")' in sql
+    assert 'cur."category" AS "category"' in sql
+    assert 'ORDER BY "gmv_yoy" DESC' in sql
     rows = conn.execute(sql).fetchall()
     assert len(rows) > 0
     # 每行校验增长率 = (cur - prev) / prev

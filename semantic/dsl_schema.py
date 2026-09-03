@@ -20,6 +20,10 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# SQL 标识符白名单：alias / order_by.field 等直接拼入 SQL 标识符位置的自由字符串，
+# 必须严格限制为 ASCII 字母数字下划线（<=64 字符），从 Pydantic 校验层杜绝标识符注入（P0-1）。
+IDENTIFIER_PATTERN: str = r"^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+
 
 # --------------------------------------------------------------------------- #
 # 时间相关枚举
@@ -122,7 +126,7 @@ class AggregateMetric(BaseModel):
     kind: Literal["aggregate"] = "aggregate"
     field: str = Field(min_length=1, description="聚合字段（语义目录中的逻辑字段名）")
     agg: AggFunc = AggFunc.SUM
-    alias: str = Field(min_length=1, description="输出列别名")
+    alias: str = Field(min_length=1, pattern=IDENTIFIER_PATTERN, description="输出列别名")
 
 
 class RatioMetric(BaseModel):
@@ -136,7 +140,7 @@ class RatioMetric(BaseModel):
     kind: Literal["ratio"] = "ratio"
     numerator: AggregateMetric
     denominator: AggregateMetric
-    alias: str = Field(min_length=1)
+    alias: str = Field(min_length=1, pattern=IDENTIFIER_PATTERN)
 
 
 class WindowFunc(StrEnum):
@@ -161,7 +165,7 @@ class WindowMetric(BaseModel):
     window_size: int | None = Field(
         default=None, ge=1, description="移动平均窗口大小（仅 moving_avg 需要）"
     )
-    alias: str = Field(min_length=1)
+    alias: str = Field(min_length=1, pattern=IDENTIFIER_PATTERN)
 
     @model_validator(mode="after")
     def _check_size(self) -> WindowMetric:
@@ -177,7 +181,7 @@ class Dimension(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     field: str = Field(min_length=1)
-    alias: str | None = None
+    alias: str | None = Field(default=None, pattern=IDENTIFIER_PATTERN)
 
 
 # --------------------------------------------------------------------------- #
@@ -225,7 +229,7 @@ class SortDirection(StrEnum):
 class OrderBy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    field: str = Field(min_length=1)
+    field: str = Field(min_length=1, pattern=IDENTIFIER_PATTERN)
     direction: SortDirection = SortDirection.DESC
 
 

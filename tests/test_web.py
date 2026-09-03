@@ -118,7 +118,7 @@ def test_run_query_scan_cap_self_heals(conn, monkeypatch):
 
 
 def test_run_query_exec_error_surfaces_without_llm(conn, monkeypatch):
-    """确定性兜底（无 LLM）下执行失败透传原始报错，不做静默猜测。"""
+    """确定性兜底（无 LLM）下执行失败：返回友好话术，技术细节在 error_detail。"""
     import web.service as svc
     from exec.guards import SqlExecutionError
 
@@ -129,4 +129,23 @@ def test_run_query_exec_error_surfaces_without_llm(conn, monkeypatch):
 
     result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
     assert "error" in result
-    assert "Binder Error" in result["error"]
+    assert "查询执行出错" in result["error"]
+    assert "error_detail" in result
+    assert "Binder Error" in result["error_detail"]
+
+
+def test_run_query_degrades_to_heuristic_when_llm_fails(conn, monkeypatch):
+    """P0-5：已配 Key 但 LLM 网络故障 -> 降级到确定性启发式并标记 degraded。"""
+    import agent.pipeline as pipeline
+    from agent.llm import LLMError
+
+    def boom(*args, **kwargs):
+        raise LLMError("LLM 网络/服务错误: Connection refused")
+
+    monkeypatch.setattr(pipeline, "_default_agent", boom)
+
+    result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
+    assert "error" not in result
+    assert result["degraded"] is True
+    assert result["mode"] == "degraded"
+    assert result["columns"] == ["gmv"]

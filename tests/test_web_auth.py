@@ -58,6 +58,41 @@ def _login(port, username, password):
 # --------------------------------------------------------------------------- #
 # 鉴权门槛
 # --------------------------------------------------------------------------- #
+def test_startup_security_validation():
+    """P0-3：严格模式下弱 JWT 密钥与关闭鉴权都被启动校验拒绝。"""
+    from config import settings
+    from web.server import _startup_security_issues
+
+    original = (settings.AUTH_STRICT, settings.AUTH_JWT_SECRET, settings.AUTH_ENABLED)
+    try:
+        # 本地开发默认配置：非严格、强密钥、鉴权开启 -> 无问题
+        settings.AUTH_STRICT = False
+        settings.AUTH_JWT_SECRET = "a" * 64
+        settings.AUTH_ENABLED = True
+        assert _startup_security_issues("127.0.0.1") == []
+
+        # 严格模式 + 弱默认密钥 -> 拒绝
+        settings.AUTH_STRICT = True
+        settings.AUTH_JWT_SECRET = "dev-insecure-jwt-secret-change-me"
+        issues = _startup_security_issues("127.0.0.1")
+        assert any("AUTH_JWT_SECRET" in issue for issue in issues)
+
+        # 严格模式 + 关闭鉴权 -> 拒绝
+        settings.AUTH_STRICT = True
+        settings.AUTH_JWT_SECRET = "a" * 64
+        settings.AUTH_ENABLED = False
+        issues = _startup_security_issues("127.0.0.1")
+        assert any("AUTH_ENABLED" in issue for issue in issues)
+
+        # 非 localhost 绑定即使未开 AUTH_STRICT 也按严格模式处理
+        settings.AUTH_STRICT = False
+        settings.AUTH_JWT_SECRET = "dev-insecure-jwt-secret-change-me"
+        issues = _startup_security_issues("0.0.0.0")
+        assert any("AUTH_JWT_SECRET" in issue for issue in issues)
+    finally:
+        settings.AUTH_STRICT, settings.AUTH_JWT_SECRET, settings.AUTH_ENABLED = original
+
+
 def test_query_without_credentials_401():
     server, port = _start_server()
     try:
@@ -102,6 +137,32 @@ def test_login_wrong_password_401():
         status, _, _ = _login(port, "bob", "wrong")
         assert status == 401
     finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_login_rate_limited_after_repeated_failures():
+    """P0-4：连续失败触发用户名+IP 指数退避限流（429 + Retry-After）。"""
+    import auth.ratelimit as ratelimit
+    from web import server as web_server
+
+    limiter = ratelimit.LoginRateLimiter(max_failures=3, base_seconds=30.0)
+    # 使用独立的 limiter 实例避免污染默认单例
+    original = web_server.default_login_limiter
+    web_server.default_login_limiter = lambda: limiter
+    server, port = _start_server()
+    try:
+        for _ in range(3):
+            _login(port, "bob", "wrong")
+        status, body, resp = _login(port, "bob", "wrong")
+        assert status == 429
+        assert "retry_after" in body
+        assert resp.headers.get("Retry-After")
+        # 其他用户名+IP 不受影响
+        status2, _, _ = _login(port, "admin", "admin123")
+        assert status2 == 200
+    finally:
+        web_server.default_login_limiter = original
         server.shutdown()
         server.server_close()
 

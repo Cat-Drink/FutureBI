@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 from audit.logging import get_logger, get_request_id, set_request_context, setup_logging
 from auth.errors import AuthenticationError
 from auth.gateway import AuthContext, authenticate, create_session, default_identity_store
+from auth.ratelimit import LoginRateLimitError, default_login_limiter
 from auth.session import default_session_store
 from auth.tokens import create_token
 from config import settings
@@ -165,14 +166,27 @@ class Handler(BaseHTTPRequestHandler):
         if not username or not password:
             return self._send_json({"error": "username and password are required"}, 400)
 
+        limiter = default_login_limiter()
+        rate_key = f"{username}:{self.client_address[0]}"
+        try:
+            limiter.check(rate_key)
+        except LoginRateLimitError as exc:
+            return self._send_json(
+                {"error": str(exc), "retry_after": exc.retry_after},
+                429,
+                headers={"Retry-After": str(exc.retry_after)},
+            )
+
         store = default_identity_store()
         try:
             user = store.authenticate(username, password)
-        except AuthenticationError as exc:
+        except AuthenticationError:
+            limiter.record_failure(rate_key)
             _auth_logger.warning(
                 "login_failed", extra={"event": "login_failed", "username": username}
             )
-            return self._send_json({"error": str(exc)}, 401)
+            return self._send_json({"error": "用户名或口令错误"}, 401)
+        limiter.record_success(rate_key)
 
         token = create_token(
             user.username,
@@ -296,17 +310,40 @@ def _cookie_session_id(cookie_header: str | None) -> str | None:
         return None
 
 
+def _startup_security_issues(host: str) -> list[str]:
+    """严格模式下拒绝弱密钥与关闭鉴权。"""
+    local_hosts = {"127.0.0.1", "localhost", "::1"}
+    strict = settings.AUTH_STRICT or host.strip().lower() not in local_hosts
+    if not strict:
+        return []
+    issues: list[str] = []
+    if settings.AUTH_JWT_SECRET in settings.WEAK_JWT_SECRETS:
+        issues.append("AUTH_JWT_SECRET 使用弱默认值，必须注入强随机密钥")
+    if not settings.AUTH_ENABLED:
+        issues.append("AUTH_ENABLED=0 在严格生产模式下不允许")
+    return issues
+
+
 def main() -> None:
     setup_logging(_level_from_str(settings.LOG_LEVEL))
+    host = settings.WEB_HOST
+    issues = _startup_security_issues(host)
+    if issues:
+        for issue in issues:
+            print(f"[startup-security] {issue}", file=sys.stderr)
+        raise SystemExit(1)
     ensure_db()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = ThreadingHTTPServer((host, port), Handler)
     auth_state = (
         "enabled"
         if settings.AUTH_ENABLED
         else f"disabled (default: {settings.AUTH_DEFAULT_PRINCIPAL})"
     )
-    print(f"FutureBI Web UI running at http://127.0.0.1:{port}  [auth={auth_state}]", flush=True)
+    display_host = "localhost" if host in {"0.0.0.0", "::"} else host
+    print(
+        f"FutureBI Web UI running at http://{display_host}:{port}  [auth={auth_state}]", flush=True
+    )
     server.serve_forever()
 
 
