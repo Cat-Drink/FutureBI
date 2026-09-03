@@ -189,6 +189,27 @@ python -m eval.eval_runner --pipeline agent   # 真实 Agent（无 Key 时启发
 - `agent/pipeline.py`：`run_pipeline(query, principal=None)` 可选主体，None 等价 admin（向后兼容）；
 - 测试：`tests/test_security.py` 9 个用例（表级拒绝/放行、列级拒绝/放行、RLS 注入与结果校验、未知主体、端到端拒绝）。
 
+## 9. 六期：展示层（解释 + 可视化推荐，已完成）
+
+新增 `present/` 模块，把结构化 DSL 确定性转成人类可读结果，补齐 Data Agent
+"可解释、可展示"能力（纯函数、零 LLM、零外部依赖）：
+
+- `present/labels.py`：逻辑字段/聚合/操作符/枚举值的中文标签映射；
+- `present/explain.py`：`explain(dsl) -> str`，把指标/维度/过滤/时间/排序/limit
+  翻译成一句中文业务话术；
+- `present/viz.py`：`recommend_viz(dsl, columns, rows) -> str`，按结果形状推荐
+  图表类型（number/line/bar/pie/table），`viz_config` 输出前端可用的 x/y 配置。
+
+用法示例：
+```python
+from agent.pipeline import run_pipeline
+from present.explain import explain
+from present.viz import recommend_viz
+
+dsl = run_pipeline("各品类成功订单的GMV分布？")
+print(explain(dsl))                 # 查询指标：gmv（求和订单金额），按 类目 分组，筛选条件：支付状态 等于 成功，最多返回 100 条。
+```
+
 验证 LLM 路径是否生效：
 ```bash
 # 返回 LLMNL2DSL 说明已启用 LLM；返回 DeterministicNL2DSL 说明在启发式兜底
