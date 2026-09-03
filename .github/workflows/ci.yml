@@ -4,6 +4,9 @@ on:
   push:
     branches: [master]
   pull_request:
+  # 夜跑（§4 项5）：每日凌晨跑全量测试 + golden 双模式，防回归漏网
+  schedule:
+    - cron: "17 4 * * *"
 
 jobs:
   lint:
@@ -37,4 +40,25 @@ jobs:
         run: python -m eval.eval_runner
       - name: Run golden eval (agent heuristic)
         run: python -m eval.eval_runner --pipeline agent
+
+  nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Rebuild mock warehouse
+        run: python -m mock.init_duckdb
+      - name: Run full pytest suite
+        run: python -m pytest -q
+      - name: Golden eval (oracle)
+        run: python -m eval.eval_runner
+      - name: Golden eval (agent heuristic)
+        run: python -m eval.eval_runner --pipeline agent
+      - name: RLS adversarial matrix (restricted x sensitive)
+        run: python -m pytest -q tests/test_security.py tests/test_scope.py -k "rls or scope or adversarial or sensitive"
 

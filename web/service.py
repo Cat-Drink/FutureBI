@@ -20,6 +20,7 @@ from agent.pipeline import rewrite_dsl, run_pipeline_with_status
 from agent.router import Action, route_query
 from agent.slotfill import ClarifyContext, attempt_fill, default_slot_store, pending_kinds
 from audit.logging import get_logger, set_request_context
+from audit.metrics import default_registry
 from audit.record import AuditRecord
 from audit.store import AuditStore
 from compiler.sql_compiler import CompileError, compile_sql
@@ -160,6 +161,7 @@ def _execute_with_self_heal(
                 rewrites += 1
             except Exception:
                 # 自愈失败（无 LLM / LLM 拒绝 / 安全守卫拒绝）-> 透传原始报错
+                default_registry().record_self_heal_failure()
                 raise exc from None
 
 
@@ -199,6 +201,7 @@ def run_query(
     scan_rows: int | None = None
     rewrites: int | None = None
     error: str | None = None
+    circuit_breaker: str | None = None
 
     ctx_override: dict[str, Any] | None = None
     effective_query = query
@@ -279,6 +282,14 @@ def run_query(
         error = _friendly_error(exc)
         result["error"] = error
         result["error_detail"] = f"{type(exc).__name__}: {exc}"
+        if isinstance(exc, QueryTimeoutError):
+            circuit_breaker = "query_timeout"
+        elif isinstance(exc, MaxRowsScannedExceeded):
+            circuit_breaker = "scan_rows"
+        elif isinstance(exc, ResultLimitExceeded):
+            circuit_breaker = "result_limit"
+        elif isinstance(exc, UnsafeSqlError):
+            circuit_breaker = "unsafe_sql"
 
     latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
     if ctx_override is not None:
@@ -293,6 +304,21 @@ def run_query(
         ctx = dict(ctx or {})
         ctx["clarify_filled"] = True
         ctx["filled_from"] = result.get("filled_from")
+
+    # 可观测性打点（P0 / §4 项5）：QPS、P50/P95、意图分布、自愈/熔断/降级
+    try:
+        default_registry().record_query(
+            intent=str(result.get("intent", "unknown")),
+            action=str(result.get("action", "unknown")),
+            latency_ms=latency_ms,
+            error=error,
+            degraded=bool(result.get("degraded")),
+            rewrites=rewrites or 0,
+            clarify_filled=bool(result.get("clarify_filled")),
+            circuit_breaker=circuit_breaker,
+        )
+    except Exception:  # 指标打点失败绝不影响主链路
+        logger.exception("metrics_record_failed", extra={"event": "metrics_record_failed"})
 
     record = AuditRecord(
         request_id=rid,

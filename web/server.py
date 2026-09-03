@@ -32,6 +32,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from audit.logging import get_logger, get_request_id, set_request_context, setup_logging
+from audit.metrics import default_registry
 from auth.errors import AuthenticationError
 from auth.gateway import AuthContext, authenticate, create_session, default_identity_store
 from auth.ratelimit import LoginRateLimitError, default_login_limiter
@@ -123,6 +124,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
             return self._send_json({"status": "ok"})
+        if parsed.path == "/api/metrics":
+            return self._get_metrics()
         if parsed.path == "/api/auth/me":
             return self._get_me()
         if parsed.path in ("/", "/index.html"):
@@ -151,6 +154,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": "unauthorized"}, 401)
         set_request_context(request_id=self.headers.get("X-Request-ID"), user=ctx.username)
         return self._send_json(ctx.to_dict())
+
+    def _get_metrics(self) -> None:
+        """可观测性指标（受保护，P0 / §4 项5）：QPS / P50-P95 耗时 / 意图分布 /
+        自愈成功率 / 熔断次数 / 澄清触发率 / 降级次数。"""
+        ctx = self._authenticate()
+        if ctx is None:
+            return self._send_json({"error": "unauthorized"}, 401)
+        return self._send_json(default_registry().snapshot())
 
     def _post_login(self) -> None:
         """登录：校验用户名/口令 -> 签发 JWT + 服务端会话。

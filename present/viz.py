@@ -17,7 +17,7 @@ def recommend_viz(
     columns: tuple[str, ...] | list[str],
     rows: tuple[tuple, ...] | list[tuple],
 ) -> str:
-    """返回推荐图表类型：number / line / bar / pie / table。"""
+    """返回推荐图表类型：number / line / bar / pie / pivot / table。"""
     dims = [d.alias or d.field for d in dsl.dimensions]
     n_metrics = len(dsl.metrics)
     n_rows = len(rows)
@@ -36,6 +36,10 @@ def recommend_viz(
         if n_rows <= 8:
             return "pie"
         return "bar"
+
+    # 多维或单维多指标 -> 透视表（P0 / §4 项5）
+    if len(dims) >= 2 or n_metrics >= 2:
+        return "pivot"
 
     # 其余 -> 明细表
     return "table"

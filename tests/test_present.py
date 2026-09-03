@@ -108,10 +108,21 @@ def test_viz_bar_for_many_categories():
     assert recommend_viz(dsl, ("category", "gmv"), rows) == "bar"
 
 
-def test_viz_table_for_multi_dimension():
+def test_viz_pivot_for_multi_dimension():
     dsl = _dsl(dimensions=[{"field": "category"}, {"field": "brand"}])
     rows = (("a", "b", 1),)
-    assert recommend_viz(dsl, ("category", "brand", "gmv"), rows) == "table"
+    assert recommend_viz(dsl, ("category", "brand", "gmv"), rows) == "pivot"
+
+
+def test_viz_pivot_for_multi_metric():
+    dsl = _dsl(
+        metrics=[
+            {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"},
+            {"kind": "aggregate", "field": "order_id", "agg": "count", "alias": "order_count"},
+        ],
+        dimensions=[{"field": "category"}],
+    )
+    assert recommend_viz(dsl, ("category", "gmv", "order_count"), (("a", 1, 2),)) == "pivot"
 
 
 def test_explain_window_metric():

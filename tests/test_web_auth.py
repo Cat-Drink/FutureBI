@@ -104,6 +104,35 @@ def test_query_without_credentials_401():
         server.server_close()
 
 
+def test_metrics_without_credentials_401():
+    server, port = _start_server()
+    try:
+        status, _, _ = _request(port, "GET", "/api/metrics")
+        assert status == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_metrics_authenticated_returns_snapshot():
+    server, port = _start_server()
+    try:
+        _, login, _ = _login(port, "admin", "admin123")
+        status, body, _ = _request(
+            port,
+            "GET",
+            "/api/metrics",
+            headers={"Authorization": f"Bearer {login['token']}"},
+        )
+        assert status == 200
+        assert "total_queries" in body
+        assert "latency_ms" in body
+        assert "intent_distribution" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_me_without_credentials_401():
     server, port = _start_server()
     try:
