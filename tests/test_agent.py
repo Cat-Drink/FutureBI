@@ -103,3 +103,59 @@ def test_llm_agent_rejects_error_flag():
     agent = LLMNL2DSL(fake, max_retries=0)
     with pytest.raises(PipelineError):
         agent.run("超出范围")
+
+
+def test_llm_agent_rewrite_success():
+    """SQL 执行自愈：把精确报错喂回 LLM 重写 DSL（至少 1 次）。"""
+    import json as _json
+
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            ],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+        }
+    )
+    corrected = _json.dumps(
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            ],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+            "time_filter": {
+                "granularity": "day",
+                "range_type": "absolute",
+                "absolute": {"start": "2024-06-01", "end": "2024-07-01"},
+            },
+        }
+    )
+    fake = FakeLLM([corrected])
+    agent = LLMNL2DSL(fake, max_retries=1)
+    new_dsl = agent.rewrite("2024年6月GMV多少", dsl, "Binder Error: 模拟引擎报错")
+    assert new_dsl.time_filter is not None
+    assert fake.calls == 1  # 至少调用一次 LLM
+
+
+def test_llm_agent_rewrite_retries_then_succeeds():
+    import json as _json
+
+    dsl = QueryDSL.model_validate(
+        {"metrics": [{"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}]}
+    )
+    good = _json.dumps(
+        {"metrics": [{"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}]}
+    )
+    fake = FakeLLM(["not json", good])
+    agent = LLMNL2DSL(fake, max_retries=2)
+    new_dsl = agent.rewrite("GMV", dsl, "timeout", attempts=2)
+    assert new_dsl.metrics[0].alias == "gmv"
+    assert fake.calls == 2
+
+
+def test_deterministic_agent_rewrite_rejects():
+    """确定性兜底无自愈能力：重写明确抛错，由上层透传原始报错。"""
+    h = DeterministicNL2DSL()
+    dsl = h.run("2024年6月GMV多少")
+    with pytest.raises(PipelineError, match="不支持"):
+        h.rewrite("2024年6月GMV多少", dsl, "Binder Error: x")

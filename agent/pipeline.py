@@ -47,3 +47,21 @@ def run_pipeline(query: str, principal: str | None = None) -> QueryDSL:
     """
     dsl = _default_agent().run(query)
     return apply_policy(dsl, principal)
+
+
+def rewrite_dsl(
+    query: str,
+    dsl: QueryDSL,
+    error: str,
+    attempts: int = 1,
+) -> QueryDSL:
+    """SQL 执行自愈：把精确的编译/引擎报错喂回 LLM，重写 DSL。
+
+    仅当配置了 LLM（LLMNL2DSL）时才有意义；确定性兜底会抛 PipelineError，
+    由调用方透传原始执行报错。attempts 为修正轮数（至少 1 次）。
+    """
+    agent = _default_agent()
+    rewrite = getattr(agent, "rewrite", None)
+    if rewrite is None:
+        raise PipelineError("当前 Agent 不支持 SQL 自愈重写")
+    return rewrite(query, dsl, error, attempts=attempts)

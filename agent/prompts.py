@@ -66,3 +66,25 @@ def build_fix_messages(query: str, raw_output: str, error: str) -> list[dict[str
             "content": f"你上次的输出无效，原因：{error}\n请重新输出修正后的 JSON。",
         },
     ]
+
+
+def build_rewrite_messages(query: str, dsl_json: str, error: str) -> list[dict[str, str]]:
+    """构造 SQL 执行自愈消息：把精确的引擎报错反馈给 LLM，要求重写 DSL。
+
+    - dsl_json：当前（编译/执行失败）的 DSL 序列化；
+    - error：编译或执行阶段的精确报错（DuckDB Binder/Catalog/运行时错误等）。
+    """
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"问题：{query}\n请仅输出符合上述结构的 JSON。"},
+        {"role": "assistant", "content": dsl_json},
+        {
+            "role": "user",
+            "content": (
+                "你上次产出的 DSL 在编译/执行时报错："
+                + error
+                + "\n请根据该报错修正 DSL（例如缩小时间窗口、调整维度/过滤条件、"
+                "改用受支持字段或修正字段引用），重新输出符合上述结构的 JSON。"
+            ),
+        },
+    ]

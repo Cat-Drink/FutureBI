@@ -347,31 +347,59 @@ def _compile_with_comparison(dsl: QueryDSL) -> str:
         gmv_prev 基准周期值
         gmv_yoy  增长率 = (cur - prev) / NULLIF(prev, 0)
     对 MOM 同理生成 {alias}_mom。多指标时逐个指标生成三列。
+
+    支持非时间维度（品类/品牌/省份等）：cur/prev 两个 CTE 各自按维度分组，
+    外层以维度列 LEFT JOIN 配对，输出 维度列 + 当前值 + 基准值 + 增长率。
+    时间维度（order_time 等）与对比的组合需要"按位配对"（如 6月1日 对 5月1日），
+    该语义未定义，显式抛 CompileError 而非静默丢弃维度（正确性缺陷修复）。
     """
     tf = dsl.time_filter
     assert tf is not None and tf.comparison != Comparison.NONE
+    granularity = tf.granularity
+
+    if any(d.field in TIME_FIELDS for d in dsl.dimensions):
+        raise CompileError(
+            "comparison 暂不支持时间维度（order_time/refund_time/register_time）："
+            "时间维度需要按位配对（当前日期 vs 基准周期对应日期），"
+            "请改用品类/品牌/省份等分组维度"
+        )
 
     cur_start, cur_end = _resolve_window(tf)
     prev_start, prev_end = _shift_window(cur_start, cur_end, tf.comparison)
     cmp_suffix = "_mom" if tf.comparison == Comparison.MOM else "_yoy"
 
+    # 维度表达式与别名（cur/prev 两 CTE 共用，保证可配对）
+    dim_exprs: list[str] = []
+    dim_aliases: list[str] = []
+    for d in dsl.dimensions:
+        expr, alias = _dimension_expr(d, granularity)
+        dim_exprs.append(expr)
+        dim_aliases.append(alias)
+
     def _window_block(label: str, start: datetime, end: datetime) -> str:
-        metrics_sql = ", ".join(
-            f"{_metric_expr(m)[0]} AS {_metric_expr(m)[1]}" for m in dsl.metrics
-        )
+        select_items: list[str] = []
+        for expr, alias in zip(dim_exprs, dim_aliases, strict=False):
+            select_items.append(f"{expr} AS {alias}")
+        for m in dsl.metrics:
+            select_items.append(f"{_metric_expr(m)[0]} AS {_metric_expr(m)[1]}")
         where = [_filter_sql(f) for f in dsl.filters]
         s = start.strftime("%Y-%m-%d %H:%M:%S")
         e = end.strftime("%Y-%m-%d %H:%M:%S")
         where.append(f"f.order_time >= TIMESTAMP '{s}' AND f.order_time < TIMESTAMP '{e}'")
-        return (
+        block = (
             f"{label} AS (\n"
-            f"  SELECT {metrics_sql}\n"
+            f"  SELECT {', '.join(select_items)}\n"
             f"  {_from_clause(dsl)}\n"
             "  WHERE " + " AND ".join(where) + "\n"
-            ")"
         )
+        if dim_exprs:
+            block += "  GROUP BY " + ", ".join(dim_exprs) + "\n"
+        block += ")"
+        return block
 
     selects: list[str] = []
+    for alias in dim_aliases:
+        selects.append(f"cur.{alias} AS {alias}")
     for m in dsl.metrics:
         alias = m.alias
         selects.append(f"cur.{alias} AS {alias}")
@@ -383,10 +411,13 @@ def _compile_with_comparison(dsl: QueryDSL) -> str:
     sql = "WITH " + _window_block("cur", cur_start, cur_end)
     sql += ",\n" + _window_block("prev", prev_start, prev_end)
     sql += "\nSELECT " + ", ".join(selects)
-    sql += "\nFROM cur, prev"
+    if dim_aliases:
+        sql += "\nFROM cur LEFT JOIN prev USING (" + ", ".join(dim_aliases) + ")"
+    else:
+        sql += "\nFROM cur, prev"
 
-    # 排序字段：允许引用当前/基准/增长率列
-    allowed = set()
+    # 排序字段：允许引用维度列 / 当前值 / 基准值 / 增长率列
+    allowed = set(dim_aliases)
     for m in dsl.metrics:
         allowed.add(m.alias)
         allowed.add(m.alias + "_prev")
@@ -395,7 +426,7 @@ def _compile_with_comparison(dsl: QueryDSL) -> str:
         parts: list[str] = []
         for o in dsl.order_by:
             if o.field not in allowed:
-                raise CompileError(f"order_by 字段 {o.field!r} 不是指标别名或对比列")
+                raise CompileError(f"order_by 字段 {o.field!r} 不是维度/指标别名或对比列")
             direction = "ASC" if o.direction == SortDirection.ASC else "DESC"
             parts.append(f"{o.field} {direction}")
         sql += "\nORDER BY " + ", ".join(parts)

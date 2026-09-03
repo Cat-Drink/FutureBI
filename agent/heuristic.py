@@ -32,6 +32,14 @@ CATEGORIES = ["数码", "家电", "服饰", "美妆", "食品", "家居"]
 class DeterministicNL2DSL:
     """关键词规则版的 NL -> DSL（覆盖 golden 高频场景）。"""
 
+    def rewrite(self, query: str, dsl: QueryDSL, error: str, attempts: int = 1) -> QueryDSL:
+        """确定性兜底无自愈能力：执行/编译失败无法用规则可靠修正，拒绝而非猜测。
+
+        保持与 LLM 路径一致的接口形态，但明确抛错，让上层自愈循环知难而退，
+        并把原始引擎报错透传给用户。
+        """
+        raise PipelineError("确定性兜底不支持 SQL 自愈重写（未配置 LLM）：" + str(error))
+
     def run(self, query: str) -> QueryDSL:
         q = query.strip()
         # 禁止静默回退默认值：未定义业务指标（如"高活用户"/"高活跃用户"）宁可拒绝，

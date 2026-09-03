@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
     sql               VARCHAR,
     latency_ms        DOUBLE,
     row_count         BIGINT,
+    scan_rows         BIGINT,
+    rewrites          BIGINT,
     error             VARCHAR,
     created_at        VARCHAR
 )
@@ -35,8 +37,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
 _INSERT_SQL = """
 INSERT INTO audit_log
     (request_id, session_id, user_name, prompt, retrieval_context,
-     dsl, sql, latency_ms, row_count, error, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     dsl, sql, latency_ms, row_count, scan_rows, rewrites, error, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -98,6 +100,8 @@ class AuditStore:
                 record.sql,
                 record.latency_ms,
                 record.row_count,
+                record.scan_rows,
+                record.rewrites,
                 record.error,
                 record.created_at,
             ],

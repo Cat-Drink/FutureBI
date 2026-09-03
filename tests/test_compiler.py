@@ -371,3 +371,59 @@ def test_multi_fact_ratio_refund_rate(conn):
     assert "LEFT JOIN fact_refunds r" in sql
     rate = conn.execute(sql).fetchone()[0]
     assert 0 <= rate <= 1
+
+
+def test_comparison_with_dimension_groups_and_pairs(conn):
+    """同环比 + 分组维度：cur/prev 按维度分组配对，输出 维度+当前+基准+增长率。
+
+    回归修复：comparison 路径此前静默丢弃 dimensions 的正确性缺陷。
+    """
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            ],
+            "dimensions": [{"field": "category"}],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+            "time_filter": {
+                "granularity": "day",
+                "range_type": "absolute",
+                "absolute": {"start": "2024-06-01", "end": "2024-07-01"},
+                "comparison": "yoy",
+            },
+            "order_by": [{"field": "gmv_yoy", "direction": "desc"}],
+        }
+    )
+    sql = compile_sql(dsl)
+    assert "GROUP BY p.category" in sql
+    assert "LEFT JOIN prev USING (category)" in sql
+    assert "cur.category AS category" in sql
+    assert "ORDER BY gmv_yoy DESC" in sql
+    rows = conn.execute(sql).fetchall()
+    assert len(rows) > 0
+    # 每行校验增长率 = (cur - prev) / prev
+    for _category, cur, prev, yoy in rows:
+        if prev:
+            assert abs(yoy - (cur - prev) / prev) < 1e-6
+        else:
+            assert yoy is None
+
+
+def test_comparison_rejects_time_dimension():
+    """时间维度 + 对比需要按位配对语义，显式报错而非静默丢弃。"""
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            ],
+            "dimensions": [{"field": "order_time"}],
+            "time_filter": {
+                "granularity": "day",
+                "range_type": "absolute",
+                "absolute": {"start": "2024-06-01", "end": "2024-07-01"},
+                "comparison": "mom",
+            },
+        }
+    )
+    with pytest.raises(CompileError, match="时间维度"):
+        compile_sql(dsl)

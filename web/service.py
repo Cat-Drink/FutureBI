@@ -15,15 +15,17 @@ from typing import Any
 
 import duckdb
 
-from agent.pipeline import run_pipeline
+from agent.pipeline import rewrite_dsl, run_pipeline
 from agent.router import Action, route_query
 from audit.logging import get_logger, set_request_context
 from audit.record import AuditRecord
 from audit.store import AuditStore
-from compiler.sql_compiler import compile_sql
+from compiler.sql_compiler import CompileError, compile_sql
 from config import settings
+from exec.guards import SqlExecutionError, execute_sql
 from present.explain import explain
 from present.viz import viz_config
+from security.guard import apply_policy
 from semantic.catalog import COLUMNS
 from semantic.dsl_schema import QueryDSL, RatioMetric, WindowMetric
 
@@ -82,6 +84,52 @@ def _retrieval_context(dsl: QueryDSL) -> dict[str, Any]:
     return {"fields": sorted(fields), "tables": tables}
 
 
+def _execute_with_self_heal(
+    query: str,
+    dsl: QueryDSL,
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    principal: str | None = None,
+) -> tuple[QueryDSL, str, Any, int]:
+    """编译 + 受控执行 + SQL 自愈重写循环（P0/P1）。
+
+    编译（CompileError）或执行（SqlExecutionError：精确引擎报错 / 查询超时 /
+    扫描行数熔断 / LIMIT 硬上限）失败时，把精确报错喂回 LLM 重写 DSL 并重试
+    （至少 1 次，受 settings.SQL_SELF_HEAL_MAX_RETRIES 约束）。重写后的 DSL
+    仍会重新经过安全守卫（防权限逃逸）。未配置 LLM 或重写失败时透传原始报错，
+    绝不静默猜测。返回 (final_dsl, final_sql, ExecutionResult, rewrites)。
+    """
+    max_rewrites = settings.SQL_SELF_HEAL_MAX_RETRIES
+    current_dsl = dsl
+    rewrites = 0
+    while True:
+        try:
+            sql = compile_sql(current_dsl)
+            exec_result = execute_sql(
+                conn,
+                sql,
+                statement_timeout_ms=settings.QUERY_TIMEOUT_MS,
+                max_scan_rows=settings.MAX_SCAN_ROWS,
+                max_result_rows=settings.MAX_RESULT_ROWS,
+            )
+            return current_dsl, sql, exec_result, rewrites
+        except (CompileError, SqlExecutionError) as exc:
+            if rewrites >= max_rewrites:
+                raise
+            try:
+                rewritten = rewrite_dsl(
+                    query,
+                    current_dsl,
+                    f"{type(exc).__name__}: {exc}",
+                    attempts=1,
+                )
+                current_dsl = apply_policy(rewritten, principal)
+                rewrites += 1
+            except Exception:
+                # 自愈失败（无 LLM / LLM 拒绝 / 安全守卫拒绝）-> 透传原始报错
+                raise exc from None
+
+
 def run_query(
     query: str,
     principal: str | None = None,
@@ -115,6 +163,8 @@ def run_query(
     dsl: QueryDSL | None = None
     sql: str | None = None
     row_count: int | None = None
+    scan_rows: int | None = None
+    rewrites: int | None = None
     error: str | None = None
 
     ctx_override: dict[str, Any] | None = None
@@ -138,23 +188,28 @@ def run_query(
             dsl = run_pipeline(query, principal)
             result["dsl"] = dsl.model_dump(mode="json")
 
-            sql = compile_sql(dsl)
-            result["sql"] = sql
-
             own_conn = conn is None
             if own_conn:
                 conn = duckdb.connect(str(settings.DB_PATH), read_only=True)
             try:
-                cur = conn.execute(sql)
-                columns = tuple(d[0] for d in cur.description)
-                rows = [[_json_safe(v) for v in row] for row in cur.fetchall()]
+                final_dsl, sql, exec_result, rewrites = _execute_with_self_heal(
+                    query, dsl, conn, principal=principal
+                )
             finally:
                 if own_conn:
                     conn.close()
 
-            result["columns"] = list(columns)
+            dsl = final_dsl
+            result["dsl"] = dsl.model_dump(mode="json")
+            result["sql"] = sql
+            result["rewrites"] = rewrites
+            result["scan_rows"] = exec_result.scan_rows
+            columns = list(exec_result.columns)
+            rows = [[_json_safe(v) for v in row] for row in exec_result.rows]
+            result["columns"] = columns
             result["rows"] = rows
             row_count = len(rows)
+            scan_rows = exec_result.scan_rows
             result["explanation"] = explain(dsl)
             result["viz"] = viz_config(dsl, columns, rows)
     except Exception as exc:
@@ -179,6 +234,8 @@ def run_query(
         sql=sql,
         latency_ms=latency_ms,
         row_count=row_count,
+        scan_rows=scan_rows,
+        rewrites=rewrites,
         error=error,
     )
 

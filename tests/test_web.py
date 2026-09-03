@@ -68,3 +68,65 @@ def test_http_smoke():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_run_query_self_heal_rewrites(conn, monkeypatch):
+    """执行报错 -> 喂回 LLM 重写（至少 1 次）-> 重试成功，rewrites 计数。"""
+    import web.service as svc
+    from exec.guards import SqlExecutionError
+
+    calls = {"n": 0}
+    real_execute = svc.execute_sql
+
+    def fake_execute(c, sql, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise SqlExecutionError("Binder Error: 模拟精确引擎报错")
+        return real_execute(c, sql, **kwargs)
+
+    monkeypatch.setattr(svc, "execute_sql", fake_execute)
+    # 模拟 LLM 重写：原样返回 DSL（验证重试链路而非重写质量）
+    monkeypatch.setattr(svc, "rewrite_dsl", lambda q, d, e, attempts=1: d)
+
+    result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
+    assert "error" not in result
+    assert result["rewrites"] == 1
+    assert calls["n"] == 2
+    assert result["columns"] == ["gmv"]
+
+
+def test_run_query_scan_cap_self_heals(conn, monkeypatch):
+    """扫描行数熔断 -> 喂回 LLM 重写后放行。"""
+    import web.service as svc
+    from exec.guards import MaxRowsScannedExceeded
+
+    calls = {"n": 0}
+    real_execute = svc.execute_sql
+
+    def fake_execute(c, sql, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise MaxRowsScannedExceeded("扫描行数上限熔断：本次查询扫描 99999999 行，超过上限 10")
+        return real_execute(c, sql, **kwargs)
+
+    monkeypatch.setattr(svc, "execute_sql", fake_execute)
+    monkeypatch.setattr(svc, "rewrite_dsl", lambda q, d, e, attempts=1: d)
+
+    result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
+    assert "error" not in result
+    assert result["rewrites"] == 1
+
+
+def test_run_query_exec_error_surfaces_without_llm(conn, monkeypatch):
+    """确定性兜底（无 LLM）下执行失败透传原始报错，不做静默猜测。"""
+    import web.service as svc
+    from exec.guards import SqlExecutionError
+
+    def fake_execute(c, sql, **kwargs):
+        raise SqlExecutionError("Binder Error: 模拟精确引擎报错")
+
+    monkeypatch.setattr(svc, "execute_sql", fake_execute)
+
+    result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
+    assert "error" in result
+    assert "Binder Error" in result["error"]

@@ -61,6 +61,7 @@ python -m web.server 8000
 semantic/   语义目录 + DSL 契约（Single Source of Truth）
 compiler/   DSL -> SQL 确定性编译器
 agent/      NL -> DSL Agent（LLM + 启发式兜底）
+exec/       SQL 执行层（P0/P1 资源治理：超时取消 / 扫描行数熔断 / LIMIT 硬上限）
 eval/       Golden 评测骨架与用例
 mock/       确定性 mock 数仓（DuckDB）
 present/    展示层（解释 + 可视化推荐）
@@ -77,5 +78,6 @@ web/        Web 可视化 UI（service + server + static 前端）
 - DSL 模型一律 `extra="forbid"`，Agent 只能产出契约内字段；
 - 评测锚点 `AS_OF_DATE = 2024-06-30`、随机种子 42，保证确定性可复现；
 - DSL 进阶语义：窗口指标 `WindowMetric`（cumsum/moving_avg，需时间维度）、日期补零 `fill_gaps`（需时间维度+明确时间窗口，仅 day/month）、分组 `TopN`（ROW_NUMBER 分区过滤）；编译器对 comparison / top_n / fill_gaps / window 的互斥组合显式抛 `CompileError`；
+- SQL 执行层（`exec/`）：statement_timeout 用线程看门狗 + `conn.interrupt()` 取消；扫描行数上限用 `EXPLAIN ANALYZE` 预检熔断；LIMIT 硬上限对返回行数做防御性熔断；编译/引擎精确报错会喂回 LLM 重写 DSL 自愈（至少 1 次，`SQL_SELF_HEAL_MAX_RETRIES`），确定性兜底模式下透传原始报错；
 - 提交前确保 `black --check .`、`ruff check .`、`python -m pytest -q` 全绿。
 

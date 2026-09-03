@@ -41,6 +41,18 @@ LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "60"))
 LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
 # --------------------------------------------------------------------------- #
+# SQL 执行层资源治理（P0/P1）—— 见 exec/ 包
+# --------------------------------------------------------------------------- #
+# 语句超时（毫秒）：超过则中断取消查询（DuckDB 侧用线程看门狗 + interrupt() 实现）
+QUERY_TIMEOUT_MS: int = int(os.getenv("QUERY_TIMEOUT_MS", "30000"))
+# 扫描行数上限：任一基表扫描超过即熔断拒绝执行（EXPLAIN ANALYZE 预检）
+MAX_SCAN_ROWS: int = int(os.getenv("MAX_SCAN_ROWS", "10000000"))
+# 返回行数硬上限：结果超过即熔断（LIMIT 硬上限，独立于 DSL 约束的防御性校验）
+MAX_RESULT_ROWS: int = int(os.getenv("MAX_RESULT_ROWS", "20000"))
+# SQL 执行自愈最大重试次数（把精确引擎报错喂回 LLM 重写 DSL，至少 1 次）
+SQL_SELF_HEAL_MAX_RETRIES: int = int(os.getenv("SQL_SELF_HEAL_MAX_RETRIES", "1"))
+
+# --------------------------------------------------------------------------- #
 # 审计与结构化日志（P0）—— 见 audit/ 包
 # --------------------------------------------------------------------------- #
 # 是否开启审计写入（对象存储 JSONL + DuckDB 审计表）

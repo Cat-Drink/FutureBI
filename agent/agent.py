@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 from agent.errors import PipelineError
 from agent.llm import OpenAICompatClient
-from agent.prompts import build_fix_messages, build_messages
+from agent.prompts import build_fix_messages, build_messages, build_rewrite_messages
 from semantic.dsl_schema import QueryDSL
 
 BT = chr(96)  # backtick
@@ -74,4 +74,32 @@ class LLMNL2DSL:
                 messages = build_fix_messages(query, raw, str(exc)[:400])
         raise PipelineError(
             "LLM 重试 " + str(self.max_retries) + " 次后仍无法产出合法 DSL: " + str(last_error)
+        ) from last_error
+
+    def rewrite(
+        self,
+        query: str,
+        dsl: QueryDSL,
+        error: str,
+        attempts: int = 1,
+    ) -> QueryDSL:
+        """SQL 执行自愈：把精确的编译/引擎报错喂回 LLM，重写 DSL。
+
+        至少调用一次 LLM（attempts >= 1）并附上 error 上下文；重写结果同样经过
+        严格校验，失败时继续反馈校验错误重试。全部失败抛 PipelineError。
+        """
+        last_error: Exception | None = None
+        messages = build_rewrite_messages(query, dsl.model_dump(mode="json"), error)
+        for _ in range(max(attempts, 1)):
+            raw = self.client.chat(messages)
+            try:
+                obj = extract_json(raw)
+                if "error" in obj and obj.get("error"):
+                    raise PipelineError("LLM 拒绝解析: " + str(obj["error"]))
+                return QueryDSL.model_validate(obj)
+            except (ValueError, TypeError, KeyError, ValidationError, PipelineError) as exc:
+                last_error = exc
+                messages = build_fix_messages(query, raw, str(exc)[:400])
+        raise PipelineError(
+            "LLM 重写 DSL 失败（尝试 " + str(max(attempts, 1)) + " 次）: " + str(last_error)
         ) from last_error
