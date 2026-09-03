@@ -71,3 +71,79 @@ def test_comparison_marker_supported_in_schema():
         }
     )
     assert tf.comparison.value == "mom"
+
+
+def test_window_metric_cumsum_parses():
+    dsl = QueryDSL.model_validate(
+        _base_dsl(
+            metrics=[
+                {
+                    "kind": "window",
+                    "base": {
+                        "kind": "aggregate",
+                        "field": "order_amount",
+                        "agg": "sum",
+                        "alias": "gmv",
+                    },
+                    "func": "cumsum",
+                    "alias": "cum_gmv",
+                }
+            ],
+            dimensions=[{"field": "order_time"}],
+        )
+    )
+    assert dsl.metrics[0].func.value == "cumsum"
+
+
+def test_moving_avg_requires_window_size():
+    with pytest.raises(ValidationError):
+        QueryDSL.model_validate(
+            _base_dsl(
+                metrics=[
+                    {
+                        "kind": "window",
+                        "base": {
+                            "kind": "aggregate",
+                            "field": "order_amount",
+                            "agg": "sum",
+                            "alias": "gmv",
+                        },
+                        "func": "moving_avg",
+                        "alias": "ma_gmv",
+                    }
+                ],
+            )
+        )
+
+
+def test_top_n_parses():
+    dsl = QueryDSL.model_validate(
+        _base_dsl(
+            dimensions=[{"field": "province"}, {"field": "category"}],
+            top_n={
+                "n": 3,
+                "partition_by": ["province"],
+                "order_by": [{"field": "gmv", "direction": "desc"}],
+            },
+        )
+    )
+    assert dsl.top_n.n == 3
+    assert dsl.top_n.partition_by == ["province"]
+
+
+def test_fill_gaps_default_false():
+    dsl = QueryDSL.model_validate(_base_dsl())
+    assert dsl.fill_gaps is False
+
+
+def test_top_n_rejects_empty_partition():
+    with pytest.raises(ValidationError):
+        QueryDSL.model_validate(
+            _base_dsl(
+                top_n={
+                    "n": 3,
+                    "partition_by": [],
+                    "order_by": [{"field": "gmv", "direction": "desc"}],
+                }
+            )
+        )

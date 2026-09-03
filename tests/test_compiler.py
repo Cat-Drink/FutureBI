@@ -162,6 +162,186 @@ def test_multi_fact_refund_join(conn):
     assert len(rows) > 0
 
 
+def test_window_cumsum(conn):
+    """窗口累计：每日累计 GMV，需时间维度。"""
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {
+                    "kind": "window",
+                    "base": {
+                        "kind": "aggregate",
+                        "field": "order_amount",
+                        "agg": "sum",
+                        "alias": "gmv",
+                    },
+                    "func": "cumsum",
+                    "alias": "cum_gmv",
+                }
+            ],
+            "dimensions": [{"field": "order_time"}],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+            "time_filter": {
+                "granularity": "day",
+                "range_type": "absolute",
+                "absolute": {"start": "2024-06-01", "end": "2024-06-08"},
+            },
+            "order_by": [{"field": "order_time", "direction": "asc"}],
+        }
+    )
+    sql = compile_sql(dsl)
+    assert "SUM(SUM(f.order_amount)) OVER (ORDER BY date_trunc('day', f.order_time))" in sql
+    rows = conn.execute(sql).fetchall()
+    # 累计单调不减
+    vals = [r[1] for r in rows]
+    assert all(vals[i] <= vals[i + 1] for i in range(len(vals) - 1))
+
+
+def test_window_moving_avg(conn):
+    """窗口移动平均：ROWS BETWEEN N-1 PRECEDING AND CURRENT ROW。"""
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {
+                    "kind": "window",
+                    "base": {
+                        "kind": "aggregate",
+                        "field": "order_amount",
+                        "agg": "sum",
+                        "alias": "gmv",
+                    },
+                    "func": "moving_avg",
+                    "window_size": 7,
+                    "alias": "ma7_gmv",
+                }
+            ],
+            "dimensions": [{"field": "order_time"}],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+            "time_filter": {
+                "granularity": "day",
+                "range_type": "absolute",
+                "absolute": {"start": "2024-06-01", "end": "2024-06-08"},
+            },
+        }
+    )
+    sql = compile_sql(dsl)
+    assert "ROWS BETWEEN 6 PRECEDING AND CURRENT ROW" in sql
+    rows = conn.execute(sql).fetchall()
+    assert len(rows) == 7
+
+
+def test_window_requires_time_dimension():
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {
+                    "kind": "window",
+                    "base": {
+                        "kind": "aggregate",
+                        "field": "order_amount",
+                        "agg": "sum",
+                        "alias": "gmv",
+                    },
+                    "func": "cumsum",
+                    "alias": "cum_gmv",
+                }
+            ],
+        }
+    )
+    with pytest.raises(CompileError):
+        compile_sql(dsl)
+
+
+def test_fill_gaps_zero_fill(conn):
+    """日期补零：spine LEFT JOIN，无数据的日期填 0。"""
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            ],
+            "dimensions": [{"field": "order_time"}],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+            "time_filter": {
+                "granularity": "day",
+                "range_type": "absolute",
+                "absolute": {"start": "2024-06-01", "end": "2024-06-08"},
+            },
+            "fill_gaps": True,
+        }
+    )
+    sql = compile_sql(dsl)
+    assert "generate_series" in sql
+    assert "COALESCE(a.gmv, 0) AS gmv" in sql
+    rows = conn.execute(sql).fetchall()
+    assert len(rows) == 7  # 7 个自然日，无缺失
+
+
+def test_fill_gaps_requires_time_filter():
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            ],
+            "dimensions": [{"field": "order_time"}],
+            "fill_gaps": True,
+        }
+    )
+    with pytest.raises(CompileError):
+        compile_sql(dsl)
+
+
+def test_top_n_partition(conn):
+    """分组 Top-N：每省 Top 3 品类。"""
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            ],
+            "dimensions": [{"field": "province"}, {"field": "category"}],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+            "top_n": {
+                "n": 3,
+                "partition_by": ["province"],
+                "order_by": [{"field": "gmv", "direction": "desc"}],
+            },
+        }
+    )
+    sql = compile_sql(dsl)
+    assert "ROW_NUMBER() OVER (PARTITION BY u.province" in sql
+    assert "__rn <= 3" in sql
+    rows = conn.execute(sql).fetchall()
+    # 每省最多 3 行
+    from collections import Counter
+
+    counts = Counter(r[0] for r in rows)
+    assert all(n <= 3 for n in counts.values())
+
+
+def test_multi_metric_comparison(conn):
+    """多指标同环比：GMV 与订单数各自输出 prev 与增长率。"""
+    dsl = QueryDSL.model_validate(
+        {
+            "metrics": [
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"},
+                {"kind": "aggregate", "field": "order_id", "agg": "count", "alias": "order_count"},
+            ],
+            "filters": [{"field": "pay_status", "operator": "eq", "value": "SUCCESS"}],
+            "time_filter": {
+                "granularity": "day",
+                "range_type": "absolute",
+                "absolute": {"start": "2024-06-01", "end": "2024-07-01"},
+                "comparison": "mom",
+            },
+        }
+    )
+    sql = compile_sql(dsl)
+    for alias in ("gmv", "order_count"):
+        assert f"{alias}_prev" in sql
+        assert f"{alias}_mom" in sql
+    row = conn.execute(sql).fetchone()
+    assert len(row) == 6
+
+
 def test_multi_fact_ratio_refund_rate(conn):
     """跨事实表比率：退款率 = SUM(refund_amount)/SUM(order_amount)。"""
     dsl = QueryDSL.model_validate(

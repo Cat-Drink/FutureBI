@@ -5,16 +5,17 @@ from __future__ import annotations
 from eval.eval_runner import evaluate_all, load_golden
 
 
-def test_golden_dataset_has_fourteen_cases():
+def test_golden_dataset_has_expected_cases():
     cases = load_golden()
-    assert len(cases) == 14
+    # 基础语义 14 例 + 进阶语义（多指标同环比/窗口/补零/分组Top-N）5 例
+    assert len(cases) == 19
     ids = [c["id"] for c in cases]
     assert len(ids) == len(set(ids)), "用例 id 必须唯一"
 
 
 def test_all_golden_cases_pass(conn):
     summary = evaluate_all(conn)
-    assert summary.total == 14
+    assert summary.total == 19
     assert summary.failed == 0, [
         (r.id, r.error, r.dsl_ok, r.sql_ok, r.result_ok) for r in summary.reports
     ]

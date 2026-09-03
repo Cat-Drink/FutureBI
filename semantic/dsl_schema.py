@@ -8,7 +8,8 @@
 - 所有模型 extra="forbid"，非法/未知字段直接报错；
 - 操作符、聚合函数、时间粒度、排序方向均为受限枚举；
 - TimeFilter 支持相对/绝对时间跨度与同比/环比标记（comparison）；
-- Metric 通过 discriminated union 区分聚合指标与比率指标（如 ARPU）。
+- Metric 通过 discriminated union 区分聚合 / 比率 / 窗口指标；
+- 顶层支持窗口分析（累计/移动平均）、日期连续补零、分组 Top-N。
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ class Granularity(StrEnum):
 
 
 class Comparison(StrEnum):
-    """同比/环比标记。当前编译器仅支持 none，其余二期实现。"""
+    """同比/环比标记。"""
 
     NONE = "none"
     YOY = "yoy"  # 同比
@@ -138,7 +139,38 @@ class RatioMetric(BaseModel):
     alias: str = Field(min_length=1)
 
 
-Metric = Annotated[AggregateMetric | RatioMetric, Field(discriminator="kind")]
+class WindowFunc(StrEnum):
+    """窗口函数种类（在时间维度上滚动计算）。"""
+
+    CUMSUM = "cumsum"  # 累计求和
+    MOVING_AVG = "moving_avg"  # 移动平均
+
+
+class WindowMetric(BaseModel):
+    """窗口指标：先按时间分组聚合，再在时间维度上做滚动窗口计算。
+
+    - cumsum：累计求和（如每日累计 GMV）；
+    - moving_avg：移动平均（如近 7 日移动平均 GMV），必须提供 window_size。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["window"] = "window"
+    base: AggregateMetric
+    func: WindowFunc
+    window_size: int | None = Field(
+        default=None, ge=1, description="移动平均窗口大小（仅 moving_avg 需要）"
+    )
+    alias: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_size(self) -> WindowMetric:
+        if self.func == WindowFunc.MOVING_AVG and self.window_size is None:
+            raise ValueError("moving_avg 指标必须提供 window_size")
+        return self
+
+
+Metric = Annotated[AggregateMetric | RatioMetric | WindowMetric, Field(discriminator="kind")]
 
 
 class Dimension(BaseModel):
@@ -198,6 +230,25 @@ class OrderBy(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# 分组 Top-N
+# --------------------------------------------------------------------------- #
+class TopN(BaseModel):
+    """分组 Top-N：在每个分区内按排序字段取前 N 条。
+
+    例如 "每省 GMV Top 3 品类"：
+    - partition_by = ["province"]（分区维度）；
+    - order_by = [{field:"gmv", direction:"desc"}]（分区内排序）。
+    编译器生成 ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...) 再过滤序号 <= n。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    n: int = Field(ge=1, description="每分区保留的前 N 条")
+    partition_by: list[str] = Field(min_length=1, description="分区维度（逻辑字段名）")
+    order_by: list[OrderBy] = Field(min_length=1, description="分区内排序（指标别名或维度名）")
+
+
+# --------------------------------------------------------------------------- #
 # 顶层 DSL
 # --------------------------------------------------------------------------- #
 class QueryDSL(BaseModel):
@@ -209,3 +260,8 @@ class QueryDSL(BaseModel):
     filters: list[Filter] = Field(default_factory=list)
     order_by: list[OrderBy] = Field(default_factory=list)
     limit: int = Field(default=100, ge=1, le=10000)
+    fill_gaps: bool = Field(
+        default=False,
+        description="日期连续补零：按时间维度补齐缺失日期并用 0 填充指标",
+    )
+    top_n: TopN | None = Field(default=None, description="分组 Top-N（如每省 Top 3 品类）")

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from security.policy import POLICIES, Policy
 from semantic.catalog import COLUMNS
-from semantic.dsl_schema import Filter, QueryDSL, RatioMetric
+from semantic.dsl_schema import Filter, QueryDSL, RatioMetric, WindowMetric
 
 
 class SecurityError(RuntimeError):
@@ -27,6 +27,8 @@ def _referenced_fields(dsl: QueryDSL) -> set[str]:
         if isinstance(m, RatioMetric):
             fields.add(m.numerator.field)
             fields.add(m.denominator.field)
+        elif isinstance(m, WindowMetric):
+            fields.add(m.base.field)
         else:
             fields.add(m.field)
     for d in dsl.dimensions:

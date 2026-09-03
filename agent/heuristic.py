@@ -5,6 +5,14 @@
 2. 作为 LLM 输出的独立对照（cross-check）。
 
 超出规则范围的提问会抛 PipelineError（拒绝而非猜测），与 LLM 路径行为一致。
+
+覆盖的语义能力：
+- 单/多指标聚合（GMV、订单数、去重用户、客单价、退款金额）；
+- 比率指标（退款率、ARPU）；
+- 同比/环比（comparison）；
+- 窗口函数（累计 cumsum / 移动平均 moving_avg）；
+- 日期连续补零（fill_gaps）；
+- 分组 Top-N（每省/每品牌/每品类 Top N）。
 """
 
 from __future__ import annotations
@@ -26,9 +34,17 @@ class DeterministicNL2DSL:
     def run(self, query: str) -> QueryDSL:
         q = query.strip()
         try:
+            top_n = self._top_n(q)
+            dims = self._dimensions(q)
+            # 分组 Top-N：分区维度排在最前，其余为排名维度
+            if top_n:
+                partition = set(top_n["partition_by"])
+                rank_dims = [d for d in dims if d["field"] not in partition]
+                dims = [{"field": p} for p in top_n["partition_by"]] + rank_dims
+
             dsl: dict[str, Any] = {
                 "metrics": self._metrics(q),
-                "dimensions": self._dimensions(q),
+                "dimensions": dims,
                 "filters": self._filters(q),
                 "order_by": self._order_by(q),
                 "limit": self._limit(q),
@@ -39,6 +55,10 @@ class DeterministicNL2DSL:
             comparison = self._comparison(q)
             if comparison:
                 dsl["time_filter"]["comparison"] = comparison
+            if self._fill_gaps(q):
+                dsl["fill_gaps"] = True
+            if top_n:
+                dsl["top_n"] = top_n
             return QueryDSL.model_validate(dsl)
         except PipelineError:
             raise
@@ -49,6 +69,16 @@ class DeterministicNL2DSL:
     # 指标
     # ------------------------------------------------------------------ #
     def _metrics(self, q: str) -> list[dict[str, Any]]:
+        ql = q.lower()
+
+        # 窗口指标（累计/移动平均）优先
+        wm = self._window_metric(q)
+        if wm is not None:
+            return [wm]
+
+        metrics: list[dict[str, Any]] = []
+
+        # 比率指标：退款率（早退，独占）
         if "退款率" in q or "退款金额/订单金额" in q:
             return [
                 {
@@ -69,16 +99,16 @@ class DeterministicNL2DSL:
                 }
             ]
         if "退款金额" in q or "退款总额" in q:
-            return [
+            metrics.append(
                 {
                     "kind": "aggregate",
                     "field": "refund_amount",
                     "agg": "sum",
                     "alias": "refund_amount",
                 }
-            ]
-        if "arpu" in q.lower() or "人均消费" in q:
-            return [
+            )
+        if "arpu" in ql or "人均消费" in q:
+            metrics.append(
                 {
                     "kind": "ratio",
                     "numerator": {
@@ -95,49 +125,104 @@ class DeterministicNL2DSL:
                     },
                     "alias": "arpu",
                 }
-            ]
-        ql = q.lower()
+            )
         if any(k in ql for k in ("gmv", "销售额", "成交额", "成交金额", "总销售")):
-            return [{"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}]
+            metrics.append(
+                {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            )
         if any(k in q for k in ("去重用户", "活跃用户")):
-            return [
+            metrics.append(
                 {
                     "kind": "aggregate",
                     "field": "user_id",
                     "agg": "count_distinct",
                     "alias": "active_users",
                 }
-            ]
+            )
         if any(k in q for k in ("订单总数", "订单数", "订单量")):
-            return [
+            metrics.append(
                 {"kind": "aggregate", "field": "order_id", "agg": "count", "alias": "order_count"}
-            ]
+            )
         if "客单价" in q:
-            return [
+            metrics.append(
                 {
                     "kind": "aggregate",
                     "field": "order_amount",
                     "agg": "avg",
                     "alias": "avg_order_amount",
                 }
-            ]
-        raise PipelineError("无法识别指标（需要 GMV/订单数/去重用户/ARPU/客单价 之一）")
+            )
+
+        if not metrics:
+            raise PipelineError("无法识别指标（需要 GMV/订单数/去重用户/ARPU/客单价 之一）")
+        return metrics
+
+    def _window_metric(self, q: str) -> dict[str, Any] | None:
+        """识别窗口指标：累计（cumsum）/ 移动平均（moving_avg）。"""
+        is_ma = "移动平均" in q or "滑动平均" in q
+        is_cum = "累计" in q
+        if not (is_ma or is_cum):
+            return None
+
+        if "订单数" in q or "订单量" in q:
+            base = {
+                "kind": "aggregate",
+                "field": "order_id",
+                "agg": "count",
+                "alias": "order_count",
+            }
+            stem = "order_count"
+        else:
+            base = {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
+            stem = "gmv"
+
+        if is_ma:
+            m = re.search(r"(\d+)\s*日", q)
+            size = int(m.group(1)) if m else 7
+            return {
+                "kind": "window",
+                "base": base,
+                "func": "moving_avg",
+                "window_size": size,
+                "alias": f"ma{size}_{stem}",
+            }
+        return {"kind": "window", "base": base, "func": "cumsum", "alias": f"cum_{stem}"}
 
     # ------------------------------------------------------------------ #
     # 维度
     # ------------------------------------------------------------------ #
-    def _dimensions(self, q: str) -> list[dict[str, Any]]:
+    def _dimensions(self, q: str) -> list[dict[str, str]]:
         dims: list[dict[str, str]] = []
-        if any(k in q for k in ("每日", "按天", "每天", "趋势")):
-            dims.append({"field": "order_time"})
-        if any(k in q for k in ("各品类", "按品类", "分品类", "品类分布")):
-            dims.append({"field": "category"})
+        seen: set[str] = set()
+
+        def add(field: str) -> None:
+            if field not in seen:
+                dims.append({"field": field})
+                seen.add(field)
+
+        if any(
+            k in q
+            for k in (
+                "每日",
+                "按天",
+                "每天",
+                "趋势",
+                "累计",
+                "移动平均",
+                "滑动平均",
+                "补零",
+                "补齐",
+            )
+        ):
+            add("order_time")
+        if any(k in q for k in ("各品类", "按品类", "分品类", "品类分布", "每品类", "品类")):
+            add("category")
         if "品牌" in q:
-            dims.append({"field": "brand"})
-        if any(k in q for k in ("各省", "按省份", "分省", "省份分布")):
-            dims.append({"field": "province"})
+            add("brand")
+        if any(k in q for k in ("各省", "按省份", "分省", "省份分布", "每省")):
+            add("province")
         if "支付状态" in q:
-            dims.append({"field": "pay_status"})
+            add("pay_status")
         return dims
 
     # ------------------------------------------------------------------ #
@@ -231,11 +316,55 @@ class DeterministicNL2DSL:
         return None
 
     # ------------------------------------------------------------------ #
+    # 补零 / 分组 Top-N
+    # ------------------------------------------------------------------ #
+    def _fill_gaps(self, q: str) -> bool:
+        return any(k in q for k in ("补零", "补齐", "补全"))
+
+    def _top_n(self, q: str) -> dict[str, Any] | None:
+        ql = q.lower()
+        n = None
+        m = re.search(r"top\s*(\d+)", ql)
+        if not m:
+            m = re.search(r"前\s*(\d+)\s*[个名]", q)
+        if not m:
+            return None
+        n = int(m.group(1))
+
+        partition: list[str] = []
+        if any(k in q for k in ("每省", "各省", "按省")):
+            partition.append("province")
+        elif any(k in q for k in ("每品牌", "各品牌")):
+            partition.append("brand")
+        elif any(k in q for k in ("每品类", "各品类")):
+            partition.append("category")
+        if not partition:
+            return None
+        return {
+            "n": n,
+            "partition_by": partition,
+            "order_by": [{"field": self._primary_alias(q), "direction": "desc"}],
+        }
+
+    # ------------------------------------------------------------------ #
     # 排序 / 截断
     # ------------------------------------------------------------------ #
     def _order_by(self, q: str) -> list[dict[str, Any]]:
-        # 趋势 -> 按时间升序
-        if any(k in q for k in ("每日", "按天", "每天", "趋势")):
+        # 趋势/窗口/补零 -> 按时间升序
+        if any(
+            k in q
+            for k in (
+                "每日",
+                "按天",
+                "每天",
+                "趋势",
+                "累计",
+                "移动平均",
+                "滑动平均",
+                "补零",
+                "补齐",
+            )
+        ):
             return [{"field": "order_time", "direction": "asc"}]
         # 最高/前N -> 按主指标降序
         if any(k in q for k in ("最高", "排名", "前")):

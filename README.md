@@ -87,8 +87,9 @@ FutureBI/
 
 ### 模块 D：Golden Dataset 与评测（eval/）
 
-`golden_dataset.json` 含 10 个覆盖不同场景的高频问答对（单指标聚合、维度拆分、
-相对时间"上个月"、多过滤组合、Top N、时间趋势、计数、去重、ARPU、in/between）。
+`golden_dataset.json` 含 19 个覆盖不同场景的高频问答对（单/多指标聚合、维度拆分、
+相对时间"上个月"、多过滤组合、Top N、时间趋势、计数、去重、ARPU、in/between、
+多指标同环比、窗口累计/移动平均、日期补零、分组 Top-N）。
 
 `eval_runner.py` 对每个用例断言：① run_pipeline 返回的 DSL 与预期一致；
 ② 编译 SQL 与 golden 标准 SQL 在 DuckDB 执行后结果集一致（含 sha256 结果哈希）。
@@ -253,3 +254,26 @@ python -c "from agent.pipeline import run_pipeline; print(run_pipeline('2024年6
 
 零幻觉保障：LLM 输出先经 Pydantic 严格校验（`extra=forbid`、受限枚举），非法输出
 自动重试并反馈错误；重试耗尽即抛 `PipelineError` 拒绝回答，绝不猜测 SQL。
+
+## 11. 八期：进阶语义能力（多指标同环比 / 窗口函数 / 日期补零 / 分组 Top-N，已完成）
+
+在既有聚合/比率/同比环比基础上，新增四类进阶语义，均由确定性编译器生成 SQL：
+
+| 能力 | DSL 结构 | 编译形态 | 示例问法 |
+| --- | --- | --- | --- |
+| 多指标同环比 | metrics 含多个指标 + time_filter.comparison | cur/prev 双窗口 CTE，逐指标输出 prev 与增长率 | "2024年6月成功订单的GMV和订单数的环比是多少？" |
+| 窗口-累计 | metrics=[{kind:window, func:cumsum}] + 时间维度 | SUM(聚合) OVER (ORDER BY 时间) | "每日成功订单GMV的累计值？" |
+| 窗口-移动平均 | func:moving_avg + window_size=N | AVG(聚合) OVER (ORDER BY 时间 ROWS BETWEEN N-1 PRECEDING AND CURRENT ROW) | "每日GMV的7日移动平均？" |
+| 日期连续补零 | fill_gaps=true + 时间维度 + 明确时间窗口 | generate_series 连续日期 spine LEFT JOIN 聚合结果，指标 COALESCE 为 0 | "每日GMV趋势（补零）？" |
+| 分组 Top-N | top_n={n, partition_by, order_by} | ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...) 再过滤序号 <= n | "每省成功订单GMV Top 3 品类？" |
+
+语义契约（`semantic/dsl_schema.py`）：
+- `WindowMetric`（kind=window）：base 为 AggregateMetric，func 为 cumsum/moving_avg，
+  moving_avg 必须提供 window_size；
+- `TopN`：n >= 1、partition_by 非空维度列表、order_by 非空排序列表；
+- `QueryDSL.fill_gaps`：布尔标记，缺省 false。
+
+编译器（`compiler/sql_compiler.py`）新增 `_compile_with_top_n`、
+`_compile_with_fill_gaps` 与普通路径内的窗口指标展开，并对互斥组合
+（comparison / top_n / fill_gaps / window 同现）显式抛 CompileError 拒绝。
+golden 新增 Q15–Q19，双模式评测 19/19。

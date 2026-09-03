@@ -114,6 +114,90 @@ def test_viz_table_for_multi_dimension():
     assert recommend_viz(dsl, ("category", "brand", "gmv"), rows) == "table"
 
 
+def test_explain_window_metric():
+    dsl = _dsl(
+        metrics=[
+            {
+                "kind": "window",
+                "base": {
+                    "kind": "aggregate",
+                    "field": "order_amount",
+                    "agg": "sum",
+                    "alias": "gmv",
+                },
+                "func": "cumsum",
+                "alias": "cum_gmv",
+            }
+        ],
+        dimensions=[{"field": "order_time"}],
+    )
+    text = explain(dsl)
+    assert "累计" in text
+    assert "cum_gmv" in text
+
+
+def test_explain_moving_avg():
+    dsl = _dsl(
+        metrics=[
+            {
+                "kind": "window",
+                "base": {
+                    "kind": "aggregate",
+                    "field": "order_amount",
+                    "agg": "sum",
+                    "alias": "gmv",
+                },
+                "func": "moving_avg",
+                "window_size": 7,
+                "alias": "ma7_gmv",
+            }
+        ],
+        dimensions=[{"field": "order_time"}],
+    )
+    text = explain(dsl)
+    assert "7 日移动平均" in text
+
+
+def test_explain_top_n():
+    dsl = _dsl(
+        dimensions=[{"field": "province"}, {"field": "category"}],
+        top_n={
+            "n": 3,
+            "partition_by": ["province"],
+            "order_by": [{"field": "gmv", "direction": "desc"}],
+        },
+    )
+    text = explain(dsl)
+    assert "每个 省份 取前 3 条" in text
+
+
+def test_explain_fill_gaps():
+    dsl = _dsl(dimensions=[{"field": "order_time"}], fill_gaps=True)
+    text = explain(dsl)
+    assert "缺失日期补零" in text
+
+
+def test_viz_window_metric_is_line():
+    dsl = _dsl(
+        metrics=[
+            {
+                "kind": "window",
+                "base": {
+                    "kind": "aggregate",
+                    "field": "order_amount",
+                    "agg": "sum",
+                    "alias": "gmv",
+                },
+                "func": "cumsum",
+                "alias": "cum_gmv",
+            }
+        ],
+        dimensions=[{"field": "order_time"}],
+    )
+    rows = tuple((f"2024-06-{i:02d}", i) for i in range(5))
+    assert recommend_viz(dsl, ("order_time", "cum_gmv"), rows) == "line"
+
+
 def test_viz_config_shape():
     dsl = _dsl(dimensions=[{"field": "category"}])
     cfg = viz_config(dsl, ("category", "gmv"), (("a",),))
