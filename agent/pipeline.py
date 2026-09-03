@@ -5,6 +5,9 @@
 - 未配置（离线）      -> 使用 DeterministicNL2DSL 启发式兜底。
 
 两者都不允许返回裸 SQL；失败统一抛 PipelineError（拒绝而非猜测）。
+
+可选 principal 参数：在 DSL 生成后施加安全守卫（表级/列级/行级 RLS），
+见 security.guard.apply_policy。
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ from agent.errors import PipelineError
 from agent.heuristic import DeterministicNL2DSL
 from agent.llm import OpenAICompatClient
 from config import settings
+from security.guard import apply_policy
 from semantic.dsl_schema import QueryDSL
 
 __all__ = ["run_pipeline", "PipelineError"]
@@ -35,7 +39,11 @@ def _default_agent() -> object:
     return DeterministicNL2DSL()
 
 
-def run_pipeline(query: str) -> QueryDSL:
-    """自然语言 -> QueryDSL 插槽（生产入口）。"""
-    return _default_agent().run(query)
+def run_pipeline(query: str, principal: str | None = None) -> QueryDSL:
+    """自然语言 -> QueryDSL 插槽（生产入口）。
+
+    principal 非 None 时，对生成的 DSL 施加安全守卫（表/列/行级权限）。
+    """
+    dsl = _default_agent().run(query)
+    return apply_policy(dsl, principal)
 

@@ -174,6 +174,21 @@ python -m eval.eval_runner --pipeline agent   # 真实 Agent（无 Key 时启发
 - 支持跨事实表**比率指标**（如退款率 = `SUM(refund_amount)/SUM(order_amount)`）；
 - golden 新增 Q13（各品类退款金额）、Q14（退款率），双模式评测 14/14。
 
+## 8. 五期：权限控制（表级/列级/行级 RLS，已完成）
+
+新增 `security/` 模块，在 DSL 生成后、编译前施加主体（principal）权限守卫：
+
+| 权限 | 机制 | 策略示例 |
+| --- | --- | --- |
+| 表级 | 引用表的并集必须 ⊆ allowed_tables | restricted 不能访问 fact_refunds |
+| 列级 | 引用字段不得 ∈ forbidden_columns | restricted 不能看 discount_amount/refund_amount |
+| 行级 RLS | 强制注入 row_filters 过滤条件 | analyst 只能看 5 省、restricted 只能看广东 |
+
+- `security/policy.py`：不可变 Policy 模型 + 内置 admin/analyst/restricted 三套策略；
+- `security/guard.py`：`apply_policy(dsl, principal)` 纯函数，拒绝抛 `SecurityError`；
+- `agent/pipeline.py`：`run_pipeline(query, principal=None)` 可选主体，None 等价 admin（向后兼容）；
+- 测试：`tests/test_security.py` 9 个用例（表级拒绝/放行、列级拒绝/放行、RLS 注入与结果校验、未知主体、端到端拒绝）。
+
 验证 LLM 路径是否生效：
 ```bash
 # 返回 LLMNL2DSL 说明已启用 LLM；返回 DeterministicNL2DSL 说明在启发式兜底
