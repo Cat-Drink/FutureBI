@@ -23,7 +23,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["semantic*", "agent*", "compiler*", "eval*", "mock*", "config*", "present*", "security*", "web*"]
+include = ["semantic*", "agent*", "compiler*", "eval*", "mock*", "config*", "present*", "security*", "web*", "audit*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,10 +1,14 @@
 """Web 服务核心：NL -> DSL -> SQL -> 结果 -> 解释 -> 图表 的完整链路。
 
 纯标准库 + 既有业务模块，不引入任何 Web 框架，保持"零外部依赖"。
+同时负责审计埋点（P0）：把每次问答的 request_id / session_id / user / prompt /
+检索上下文 / DSL / 最终 SQL / 耗时 / 返回行数 / 错误 落盘，并输出结构化日志。
 """
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -12,10 +16,35 @@ from typing import Any
 import duckdb
 
 from agent.pipeline import run_pipeline
+from audit.logging import get_logger, set_request_context
+from audit.record import AuditRecord
+from audit.store import AuditStore
 from compiler.sql_compiler import compile_sql
 from config import settings
 from present.explain import explain
 from present.viz import viz_config
+from semantic.catalog import COLUMNS
+from semantic.dsl_schema import QueryDSL, RatioMetric, WindowMetric
+
+logger = get_logger("web.service")
+
+_default_store: AuditStore | None = None
+_store_lock = threading.Lock()
+
+
+def _default_audit_store() -> AuditStore | None:
+    """进程内复用的默认审计存储（按配置启用，双写 JSONL + DuckDB）。"""
+    global _default_store
+    if not settings.AUDIT_ENABLED:
+        return None
+    if _default_store is None:
+        with _store_lock:
+            if _default_store is None:
+                _default_store = AuditStore(
+                    jsonl_path=settings.AUDIT_LOG_PATH,
+                    db_path=settings.AUDIT_DB_PATH,
+                )
+    return _default_store
 
 
 def _json_safe(value: Any) -> Any:
@@ -27,16 +56,66 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _referenced_fields(dsl: QueryDSL) -> set[str]:
+    """收集 DSL 引用的全部逻辑字段（指标 + 维度 + 过滤）。"""
+    fields: set[str] = set()
+    for m in dsl.metrics:
+        if isinstance(m, RatioMetric):
+            fields.add(m.numerator.field)
+            fields.add(m.denominator.field)
+        elif isinstance(m, WindowMetric):
+            fields.add(m.base.field)
+        else:
+            fields.add(m.field)
+    for d in dsl.dimensions:
+        fields.add(d.field)
+    for f in dsl.filters:
+        fields.add(f.field)
+    return fields
+
+
+def _retrieval_context(dsl: QueryDSL) -> dict[str, Any]:
+    """从 DSL 派生"检索上下文"：本次查询命中的语义目录字段与物理表。"""
+    fields = _referenced_fields(dsl)
+    tables = sorted({COLUMNS[f].table for f in fields if f in COLUMNS})
+    return {"fields": sorted(fields), "tables": tables}
+
+
 def run_query(
     query: str,
     principal: str | None = None,
     conn: duckdb.DuckDBPyConnection | None = None,
+    *,
+    request_id: str | None = None,
+    session_id: str | None = None,
+    user: str | None = None,
+    retrieval_context: dict[str, Any] | None = None,
+    audit_store: AuditStore | None = None,
 ) -> dict[str, Any]:
     """执行完整链路，返回可直接交给前端渲染的字典；失败时写入 error 字段。
 
     conn 传入时复用该连接（测试用内存库），否则打开本地 DuckDB 文件只读。
+
+    每次调用都会：
+    1. 注入结构化日志上下文（request_id 贯穿），生成/复用 request_id；
+    2. 落一条审计记录（JSONL 对象存储 + DuckDB 审计表），记录耗时/行数/错误等。
     """
-    result: dict[str, Any] = {"query": query, "principal": principal}
+    # 注入结构化日志上下文；request_id 由调用方传入或在此生成
+    rid = set_request_context(request_id=request_id, session_id=session_id, user=user)
+    logger.info("query_start", extra={"event": "query_start"})
+
+    started = time.perf_counter()
+    result: dict[str, Any] = {
+        "query": query,
+        "principal": principal,
+        "request_id": rid,
+    }
+
+    dsl: QueryDSL | None = None
+    sql: str | None = None
+    row_count: int | None = None
+    error: str | None = None
+
     try:
         dsl = run_pipeline(query, principal)
         result["dsl"] = dsl.model_dump(mode="json")
@@ -57,10 +136,55 @@ def run_query(
 
         result["columns"] = list(columns)
         result["rows"] = rows
+        row_count = len(rows)
         result["explanation"] = explain(dsl)
         result["viz"] = viz_config(dsl, columns, rows)
     except Exception as exc:
-        result["error"] = f"{type(exc).__name__}: {exc}"
+        error = f"{type(exc).__name__}: {exc}"
+        result["error"] = error
+
+    latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
+    ctx = (
+        retrieval_context
+        if retrieval_context is not None
+        else (_retrieval_context(dsl) if dsl is not None else None)
+    )
+
+    record = AuditRecord(
+        request_id=rid,
+        session_id=session_id,
+        user=user or principal,
+        prompt=query,
+        retrieval_context=ctx,
+        dsl=dsl.model_dump(mode="json") if dsl is not None else None,
+        sql=sql,
+        latency_ms=latency_ms,
+        row_count=row_count,
+        error=error,
+    )
+
+    store = audit_store if audit_store is not None else _default_audit_store()
+    if store is not None:
+        try:
+            store.write(record)
+        except Exception:  # 审计失败绝不影响主链路
+            logger.exception("audit_write_failed", extra={"event": "audit_write_failed"})
+
+    if error:
+        logger.warning(
+            "query_end_error",
+            extra={"event": "query_end", "status": "error", "latency_ms": latency_ms},
+        )
+    else:
+        logger.info(
+            "query_end_ok",
+            extra={
+                "event": "query_end",
+                "status": "ok",
+                "latency_ms": latency_ms,
+                "row_count": row_count,
+            },
+        )
     return result
 
 

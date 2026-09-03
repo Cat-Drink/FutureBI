@@ -61,3 +61,6 @@ Thumbs.db
 # --- 日志 ---
 *.log
 
+# --- 审计产物（JSONL 对象存储 + DuckDB 审计表） ---
+logs/
+

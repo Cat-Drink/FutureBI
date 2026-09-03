@@ -10,7 +10,11 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from audit.logging import get_logger, setup_logging
+
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+
+_access_logger = get_logger("mock_llm.access")
 
 EXPECTED_DSL = {
     "metrics": [
@@ -68,10 +72,23 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def log_message(self, fmt, *args):
-        pass
+        status = str(args[1]) if len(args) > 1 else "-"
+        size = str(args[2]) if len(args) > 2 else "-"
+        _access_logger.info(
+            fmt % args,
+            extra={
+                "event": "http_access",
+                "method": self.command,
+                "path": self.path,
+                "client_ip": self.client_address[0],
+                "status": status,
+                "size": size,
+            },
+        )
 
 
 if __name__ == "__main__":
+    setup_logging()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"mock-llm listening on http://127.0.0.1:{PORT}", flush=True)
     server.serve_forever()

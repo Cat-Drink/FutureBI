@@ -39,3 +39,15 @@ LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.0"))
 LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "60"))
 LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
+# --------------------------------------------------------------------------- #
+# 审计与结构化日志（P0）—— 见 audit/ 包
+# --------------------------------------------------------------------------- #
+# 是否开启审计写入（对象存储 JSONL + DuckDB 审计表）
+AUDIT_ENABLED: bool = os.getenv("AUDIT_ENABLED", "1").lower() not in ("0", "false", "no")
+# 审计产物目录（JSONL 对象存储 + DuckDB 审计表）
+AUDIT_DIR: Path = PROJECT_ROOT / "logs"
+AUDIT_LOG_PATH: Path = AUDIT_DIR / "audit.jsonl"
+AUDIT_DB_PATH: Path = AUDIT_DIR / "audit.duckdb"
+# 结构化日志级别（web.server 启动时 setup_logging 使用）
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
