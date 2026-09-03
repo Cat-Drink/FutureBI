@@ -13,7 +13,13 @@ import os
 from datetime import date
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
+
+# 加载项目根目录 .env（若存在）。环境变量优先级高于 .env 文件，
+# 便于 CI / 容器注入真实密钥。
+load_dotenv(PROJECT_ROOT / ".env")
 
 # 本地开发零成本数仓文件（模块 C 生成）
 DB_PATH: Path = PROJECT_ROOT / "analytics_sandbox.duckdb"

@@ -119,19 +119,46 @@ pytest -v
 | LLM Agent | `agent/agent.py` LLMNL2DSL：LLM 产出 JSON -> `QueryDSL.model_validate` 严格校验 -> 失败反馈重试（零幻觉） | 配置 `LLM_API_KEY` |
 | 启发式兜底 | `agent/heuristic.py` DeterministicNL2DSL：规则化 NL -> DSL，覆盖 golden 高频问法 | 未配置 API Key（离线可跑） |
 
-配置（复制 `.env.example` 为 `.env` 并填入 `LLM_API_KEY`）：
+配置（两步，推荐用 `.env` 文件）：
 ```bash
-LLM_API_KEY=sk-xxx
-LLM_BASE_URL=https://api.openai.com/v1   # 支持任意 OpenAI 兼容端点
+# 1) 从模板创建本地配置文件（已加入 .gitignore 思路：密钥不入库）
+copy .env.example .env
+
+# 2) 编辑 .env，填入你的 Key 与端点
+LLM_API_KEY=sk-你的密钥
+LLM_BASE_URL=https://api.openai.com/v1     # 任意 OpenAI Chat Completions 兼容端点
 LLM_MODEL=gpt-4o-mini
 LLM_TEMPERATURE=0.0
+LLM_TIMEOUT=60
 LLM_MAX_RETRIES=2
 ```
+- 项目启动时 `config/settings.py` 会自动加载根目录 `.env`（依赖 `python-dotenv`）。
+- 环境变量优先级高于 `.env` 文件，便于 CI/容器注入真实密钥。
+- 常用 OpenAI 兼容端点（改 `LLM_BASE_URL`/Key 即可）：OpenAI、DeepSeek
+  (`https://api.deepseek.com/v1`)、Moonshot Kimi (`https://api.moonshot.cn/v1`)、
+  vLLM/Ollama 本地服务等。
 
 评测可切换 run_pipeline 来源：
 ```bash
 python -m eval.eval_runner                    # oracle：golden 标准答案（自闭环）
 python -m eval.eval_runner --pipeline agent   # 真实 Agent（无 Key 时启发式兜底）
+```
+
+验证 LLM 路径是否生效：
+```bash
+# 返回 LLMNL2DSL 说明已启用 LLM；返回 DeterministicNL2DSL 说明在启发式兜底
+python -c "from agent.pipeline import _default_agent; print(type(_default_agent()).__name__)"
+# 把一句中文问题走完 NL->DSL->SQL 全链路
+python -c "from agent.pipeline import run_pipeline; from compiler.sql_compiler import compile_sql; print(compile_sql(run_pipeline('2024年6月成功订单的总销售额是多少？')))"
+```
+
+离线自检（无需真实 Key）：`tools/mock_llm_server.py` 是本地 OpenAI 兼容
+Chat Completions 模拟服务，可验证客户端协议握手与围栏剥离：
+```bash
+python tools/mock_llm_server.py 8765          # 终端 A：启动模拟端点
+# 终端 B（指向模拟端点）：
+set LLM_API_KEY=sk-mock & set LLM_BASE_URL=http://127.0.0.1:8765/v1 & set LLM_MODEL=mock
+python -c "from agent.pipeline import run_pipeline; print(run_pipeline('2024年6月GMV多少').model_dump_json())"
 ```
 
 零幻觉保障：LLM 输出先经 Pydantic 严格校验（`extra=forbid`、受限枚举），非法输出
