@@ -76,5 +76,6 @@ web/        Web 可视化 UI（service + server + static 前端）
 - 所有新增逻辑字段必须登记在 `semantic/catalog.py` 的 `COLUMNS` 白名单，否则编译器拒绝；
 - DSL 模型一律 `extra="forbid"`，Agent 只能产出契约内字段；
 - 评测锚点 `AS_OF_DATE = 2024-06-30`、随机种子 42，保证确定性可复现；
+- DSL 进阶语义：窗口指标 `WindowMetric`（cumsum/moving_avg，需时间维度）、日期补零 `fill_gaps`（需时间维度+明确时间窗口，仅 day/month）、分组 `TopN`（ROW_NUMBER 分区过滤）；编译器对 comparison / top_n / fill_gaps / window 的互斥组合显式抛 `CompileError`；
 - 提交前确保 `black --check .`、`ruff check .`、`python -m pytest -q` 全绿。
 
