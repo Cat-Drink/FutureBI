@@ -18,6 +18,7 @@ import duckdb
 from agent.errors import PipelineError
 from agent.pipeline import rewrite_dsl, run_pipeline_with_status
 from agent.router import Action, route_query
+from agent.slotfill import ClarifyContext, attempt_fill, default_slot_store, pending_kinds
 from audit.logging import get_logger, set_request_context
 from audit.record import AuditRecord
 from audit.store import AuditStore
@@ -200,24 +201,52 @@ def run_query(
     error: str | None = None
 
     ctx_override: dict[str, Any] | None = None
+    effective_query = query
     try:
-        route = route_query(query, principal)
+        # P0-5 澄清槽位回填：命中上一轮挂起上下文且答案可填槽时，合并回原问题
+        slot_store = default_slot_store() if session_id else None
+        pending = slot_store.get(session_id) if slot_store is not None else None
+        if pending is not None and pending_kinds(pending):
+            merged = attempt_fill(pending, query)
+            if merged is not None:
+                effective_query = merged
+                result["clarify_filled"] = True
+                result["resolved_query"] = effective_query
+                result["filled_from"] = pending.original_query
+                slot_store.clear(session_id)
+
+        route = route_query(effective_query, principal)
         result["intent"] = route.intent.value
         result["action"] = route.action.value
         result["message"] = route.message
 
         if route.action == Action.CHITCHAT:
+            if slot_store is not None:
+                slot_store.clear(session_id)
             error = route.message
             result["error"] = error
         elif route.action == Action.CLARIFY:
+            # 保存澄清上下文，供用户短语回答时回填槽位
+            if slot_store is not None:
+                slot_store.set(
+                    session_id,
+                    ClarifyContext(
+                        original_query=effective_query,
+                        pending=tuple(c.kind for c in route.clarifications),
+                    ),
+                )
             result["clarifications"] = [c.to_dict() for c in route.clarifications]
             error = route.message
             result["error"] = error
         elif route.action == Action.RAG:
+            if slot_store is not None:
+                slot_store.clear(session_id)
             result["documents"] = [d.to_dict() for d in route.documents]
             ctx_override = {"intent": "rag", "documents": [d.key for d in route.documents]}
         else:
-            dsl, degraded = run_pipeline_with_status(query, principal)
+            if slot_store is not None:
+                slot_store.clear(session_id)
+            dsl, degraded = run_pipeline_with_status(effective_query, principal)
             result["degraded"] = degraded
             result["mode"] = "degraded" if degraded else "normal"
             result["dsl"] = dsl.model_dump(mode="json")
@@ -227,7 +256,7 @@ def run_query(
                 conn = duckdb.connect(str(settings.DB_PATH), read_only=True)
             try:
                 final_dsl, sql, exec_result, rewrites = _execute_with_self_heal(
-                    query, dsl, conn, principal=principal
+                    effective_query, dsl, conn, principal=principal
                 )
             finally:
                 if own_conn:
@@ -258,6 +287,12 @@ def run_query(
         ctx = retrieval_context
     else:
         ctx = _retrieval_context(dsl) if dsl is not None else None
+
+    # 澄清槽位回填（P0-5）：把合并来源写进审计检索上下文，保证澄清对话可追溯
+    if result.get("clarify_filled"):
+        ctx = dict(ctx or {})
+        ctx["clarify_filled"] = True
+        ctx["filled_from"] = result.get("filled_from")
 
     record = AuditRecord(
         request_id=rid,

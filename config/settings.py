@@ -51,6 +51,8 @@ MAX_SCAN_ROWS: int = int(os.getenv("MAX_SCAN_ROWS", "10000000"))
 MAX_RESULT_ROWS: int = int(os.getenv("MAX_RESULT_ROWS", "20000"))
 # SQL 执行自愈最大重试次数（把精确引擎报错喂回 LLM 重写 DSL，至少 1 次）
 SQL_SELF_HEAL_MAX_RETRIES: int = int(os.getenv("SQL_SELF_HEAL_MAX_RETRIES", "1"))
+# 澄清槽位上下文 TTL（秒）：用户回答"最近30天"等短语的合并窗口（P0-5）
+CLARIFY_SLOT_TTL: int = int(os.getenv("CLARIFY_SLOT_TTL", "1800"))
 
 # --------------------------------------------------------------------------- #
 # 审计与结构化日志（P0）—— 见 audit/ 包

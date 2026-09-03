@@ -345,7 +345,7 @@ class DeterministicNL2DSL:
                 "relative": {"amount": 1, "unit": "month", "mode": "calendar"},
                 "reference_date": settings.AS_OF_DATE.isoformat(),
             }
-        m = re.search(r"过去\s*(\d+)\s*天", q)
+        m = re.search(r"(?:过去|最近|近)\s*(\d+)\s*(?:天|日)", q)
         if m:
             return {
                 "granularity": "day",
