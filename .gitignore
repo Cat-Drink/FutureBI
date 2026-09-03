@@ -64,3 +64,6 @@ Thumbs.db
 # --- 审计产物（JSONL 对象存储 + DuckDB 审计表） ---
 logs/
 
+# --- 开发工具缓存（DSH vision router 产物） ---
+.dsh-vision-router/
+

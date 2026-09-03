@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from agent.clarify import undefined_metric_terms
 from agent.errors import PipelineError
 from config import settings
 from semantic.dsl_schema import QueryDSL
@@ -33,6 +34,14 @@ class DeterministicNL2DSL:
 
     def run(self, query: str) -> QueryDSL:
         q = query.strip()
+        # 禁止静默回退默认值：未定义业务指标（如"高活用户"/"高活跃用户"）宁可拒绝，
+        # 也不近似映射为已有指标（如"活跃用户"）。路由层负责主动反问，此处兜底拒绝。
+        undefined = undefined_metric_terms(q)
+        if undefined:
+            raise PipelineError(
+                "检测到未定义业务指标（" + "、".join(undefined) + "），"
+                "请先补充其业务口径，无法可靠解析。"
+            )
         try:
             top_n = self._top_n(q)
             dims = self._dimensions(q)

@@ -68,6 +68,25 @@ body {
 
 .hidden { display: none; }
 
+.answer {
+  margin-bottom: 18px; padding: 16px 18px; border-radius: 12px;
+  background: #eef4ff; border: 1px solid #c7d6ff; color: var(--text);
+}
+.answer-title { font-size: 14px; font-weight: 600; color: var(--accent-dark); margin-bottom: 10px; }
+.answer-body { display: flex; flex-direction: column; gap: 10px; font-size: 14px; line-height: 1.7; }
+.clarify-item { display: flex; gap: 8px; align-items: baseline; }
+.clarify-tag {
+  flex: 0 0 auto; padding: 2px 8px; border-radius: 6px; font-size: 12px;
+  background: #ffe8cc; color: #c77b0a; font-weight: 600; white-space: nowrap;
+}
+.doc-item { padding: 10px 12px; border: 1px solid #dbe4ff; border-radius: 8px; background: #fff; }
+.doc-title { font-weight: 600; margin-bottom: 4px; }
+.doc-def { color: var(--muted); margin-bottom: 6px; }
+.doc-formula {
+  display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 12px;
+  background: #10131f; color: #c9d4ff; font-family: "Consolas", "Menlo", monospace;
+}
+
 .pipeline { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 14px; }
 .output { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 

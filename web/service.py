@@ -16,6 +16,7 @@ from typing import Any
 import duckdb
 
 from agent.pipeline import run_pipeline
+from agent.router import Action, route_query
 from audit.logging import get_logger, set_request_context
 from audit.record import AuditRecord
 from audit.store import AuditStore
@@ -116,39 +117,57 @@ def run_query(
     row_count: int | None = None
     error: str | None = None
 
+    ctx_override: dict[str, Any] | None = None
     try:
-        dsl = run_pipeline(query, principal)
-        result["dsl"] = dsl.model_dump(mode="json")
+        route = route_query(query)
+        result["intent"] = route.intent.value
+        result["action"] = route.action.value
+        result["message"] = route.message
 
-        sql = compile_sql(dsl)
-        result["sql"] = sql
+        if route.action == Action.CHITCHAT:
+            error = route.message
+            result["error"] = error
+        elif route.action == Action.CLARIFY:
+            result["clarifications"] = [c.to_dict() for c in route.clarifications]
+            error = route.message
+            result["error"] = error
+        elif route.action == Action.RAG:
+            result["documents"] = [d.to_dict() for d in route.documents]
+            ctx_override = {"intent": "rag", "documents": [d.key for d in route.documents]}
+        else:
+            dsl = run_pipeline(query, principal)
+            result["dsl"] = dsl.model_dump(mode="json")
 
-        own_conn = conn is None
-        if own_conn:
-            conn = duckdb.connect(str(settings.DB_PATH), read_only=True)
-        try:
-            cur = conn.execute(sql)
-            columns = tuple(d[0] for d in cur.description)
-            rows = [[_json_safe(v) for v in row] for row in cur.fetchall()]
-        finally:
+            sql = compile_sql(dsl)
+            result["sql"] = sql
+
+            own_conn = conn is None
             if own_conn:
-                conn.close()
+                conn = duckdb.connect(str(settings.DB_PATH), read_only=True)
+            try:
+                cur = conn.execute(sql)
+                columns = tuple(d[0] for d in cur.description)
+                rows = [[_json_safe(v) for v in row] for row in cur.fetchall()]
+            finally:
+                if own_conn:
+                    conn.close()
 
-        result["columns"] = list(columns)
-        result["rows"] = rows
-        row_count = len(rows)
-        result["explanation"] = explain(dsl)
-        result["viz"] = viz_config(dsl, columns, rows)
+            result["columns"] = list(columns)
+            result["rows"] = rows
+            row_count = len(rows)
+            result["explanation"] = explain(dsl)
+            result["viz"] = viz_config(dsl, columns, rows)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         result["error"] = error
 
     latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
-    ctx = (
-        retrieval_context
-        if retrieval_context is not None
-        else (_retrieval_context(dsl) if dsl is not None else None)
-    )
+    if ctx_override is not None:
+        ctx = ctx_override
+    elif retrieval_context is not None:
+        ctx = retrieval_context
+    else:
+        ctx = _retrieval_context(dsl) if dsl is not None else None
 
     record = AuditRecord(
         request_id=rid,

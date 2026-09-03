@@ -277,3 +277,41 @@ python -c "from agent.pipeline import run_pipeline; print(run_pipeline('2024年6
 `_compile_with_fill_gaps` 与普通路径内的窗口指标展开，并对互斥组合
 （comparison / top_n / fill_gaps / window 同现）显式抛 CompileError 拒绝。
 golden 新增 Q15–Q19，双模式评测 19/19。
+
+## 12. 九期：意图路由 + 语义澄清反问（P0，已完成）
+
+在生成 DSL 之前新增意图路由闸门 `agent/router.py::route_query(query)`，
+对输入做**显式三分类**与**语义澄清反问**，禁止静默回退默认值：
+
+| 意图 | 触发条件 | 动作 |
+| --- | --- | --- |
+| `text2sql` | 数据分析查询 | 进入 NL -> DSL -> SQL 链路 |
+| `rag` | 询问指标口径/定义/怎么算 | 检索 `agent/glossary.py` 口径文档 |
+| `chitchat` | 闲聊/寒暄/越界话题 | 礼貌拒绝，不进入链路 |
+
+**语义澄清反问**（对 text2sql 命中时返回 `clarify`，绝不静默回退）：
+
+- **缺失时间窗口**：例如"成功订单的GMV是多少？"缺少时间范围，
+  返回 `missing_time_window` 反问，避免默认全量历史；
+- **未定义业务指标**：例如"高活用户/高活跃用户"未定义口径，
+  返回 `undefined_metric` 反问；启发式（`agent/heuristic.py`）同步加守卫，
+  宁可拒绝也不把"高活跃用户"近似映射为已定义的"活跃用户"。
+
+**口径文档 RAG 检索**（`agent/rag.py`，零依赖、确定性）：
+从 `agent/glossary.py` 的口径词典按"别名命中 + 字符 bigram 重叠"打分检索，
+返回指标的业务定义与计算公式，例如"GMV 的口径是什么？"命中 gmv 文档。
+
+**接入**：`web/service.py::run_query` 现在先经 `route_query` 路由，
+响应新增 `intent` / `action` / `message` / `clarifications` / `documents`
+字段，Web UI 相应渲染澄清问题与口径文档。
+
+用法示例（代码块）：
+```python
+from agent.router import route_query
+r = route_query("高活用户的GMV是多少？")
+print(r.intent.value, r.action.value)      # text2sql clarify
+print(r.clarifications[0].kind)            # undefined_metric
+print(r.clarifications[0].term)            # 高活用户
+```
+
+测试：`tests/test_router.py`（21 个用例），全量 `pytest` 保持绿色。

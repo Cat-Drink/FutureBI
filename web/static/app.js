@@ -139,8 +139,63 @@
     else { box.textContent = "该结果以表格形式展示"; }
   }
 
+  // ---------------------------------------------------------------- 意图路由结果
+  function clearAnswer() {
+    $("answer").classList.add("hidden");
+    $("answer-title").textContent = "";
+    $("answer-body").innerHTML = "";
+  }
+
+  function showAnswer(title, html) {
+    $("answer-title").textContent = title;
+    $("answer-body").innerHTML = html;
+    $("answer").classList.remove("hidden");
+  }
+
+  function clearPipeline() {
+    $("dsl").textContent = "";
+    $("sql").textContent = "";
+    $("explain").textContent = "";
+    $("chart").innerHTML = "";
+    $("table").innerHTML = "";
+  }
+
+  function renderClarifications(clarifications) {
+    var items = (clarifications || []).map(function (c) {
+      var tag = c.kind === "missing_time_window" ? "缺少时间窗口" : "未定义指标";
+      return "<div class='clarify-item'><span class='clarify-tag'>" + esc(tag) + "</span>"
+        + "<span>" + esc(c.question) + "</span></div>";
+    }).join("");
+    showAnswer("需要补充信息", items || "请补充更多信息后再查询。");
+  }
+
+  function renderDocuments(documents) {
+    var items = (documents || []).map(function (d) {
+      return "<div class='doc-item'><div class='doc-title'>" + esc(d.title) + "</div>"
+        + "<div class='doc-def'>" + esc(d.definition) + "</div>"
+        + "<code class='doc-formula'>" + esc(d.formula) + "</code></div>";
+    }).join("");
+    showAnswer("口径文档（RAG 检索结果）", items || "未检索到相关口径文档。");
+  }
+
   // ---------------------------------------------------------------- 主流程
   function render(data) {
+    clearPipeline();
+    clearAnswer();
+    if (data.action === "chitchat") {
+      showError(data.message || data.error || "抱歉，只能回答数据分析相关问题。");
+      return;
+    }
+    if (data.action === "clarify") {
+      hideError();
+      renderClarifications(data.clarifications);
+      return;
+    }
+    if (data.action === "rag") {
+      hideError();
+      renderDocuments(data.documents);
+      return;
+    }
     if (data.error) { showError(data.error); return; }
     hideError();
     $("dsl").textContent = JSON.stringify(data.dsl, null, 2);
