@@ -35,6 +35,9 @@ class DeterministicNL2DSL:
             time_filter = self._time_filter(q)
             if time_filter:
                 dsl["time_filter"] = time_filter
+            comparison = self._comparison(q)
+            if comparison:
+                dsl["time_filter"]["comparison"] = comparison
             return QueryDSL.model_validate(dsl)
         except PipelineError:
             raise
@@ -155,6 +158,17 @@ class DeterministicNL2DSL:
                 "relative": {"amount": int(m.group(1)), "unit": "day", "mode": "trailing"},
                 "reference_date": settings.AS_OF_DATE.isoformat(),
             }
+        return None
+
+    # ------------------------------------------------------------------ #
+    # 对比（同比/环比）
+    # ------------------------------------------------------------------ #
+    def _comparison(self, q: str) -> str | None:
+        ql = q.lower()
+        if "同比" in q or "yoy" in ql:
+            return "yoy"
+        if "环比" in q or "mom" in ql:
+            return "mom"
         return None
 
     # ------------------------------------------------------------------ #

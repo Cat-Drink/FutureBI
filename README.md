@@ -144,6 +144,21 @@ python -m eval.eval_runner                    # oracle：golden 标准答案（�
 python -m eval.eval_runner --pipeline agent   # 真实 Agent（无 Key 时启发式兜底）
 ```
 
+## 6. 三期：同比/环比（comparison）计算（已完成）
+
+`TimeFilter.comparison` 支持 `mom`（环比）/ `yoy`（同比），编译器生成
+`cur` / `prev` 双窗口 CTE 并输出三列（以指标别名 `gmv` 为例）：
+
+| 列 | 含义 |
+| --- | --- |
+| `gmv` | 当前周期值 |
+| `gmv_prev` | 基准周期值（环比=前一月；同比=去年同期） |
+| `gmv_mom` / `gmv_yoy` | 增长率 = (cur - prev) / NULLIF(prev, 0)，prev 为 0 时输出 NULL |
+
+- 启发式 NL2DSL 已支持"环比/同比"问法；
+- mock 数据时间跨度从 90 天扩到约 400 天（>1 年），保证同比有历史数据；
+- golden 新增 Q11（环比）/ Q12（同比），双模式评测 12/12。
+
 验证 LLM 路径是否生效：
 ```bash
 # 返回 LLMNL2DSL 说明已启用 LLM；返回 DeterministicNL2DSL 说明在启发式兜底

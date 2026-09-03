@@ -70,7 +70,8 @@ def generate(seed: int = SEED) -> tuple[list, list, list]:
         amount = round(gross - discount, 2)
         status = "SUCCESS" if rng.random() < 0.88 else "CANCELLED"
         order_time = asof - timedelta(
-            days=rng.randint(0, 89), seconds=rng.randint(0, 86399)
+            # 覆盖最近约 400 天（>1 年），使同比(yoy)/环比(mom)计算都有历史数据
+            days=rng.randint(0, 400), seconds=rng.randint(0, 86399)
         )
         orders.append((oid, uid, pid, amount, discount, status, order_time))
 

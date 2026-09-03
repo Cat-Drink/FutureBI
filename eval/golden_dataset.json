@@ -367,5 +367,75 @@
       "limit": 100
     },
     "sql": "SELECT p.category AS category, SUM(f.order_amount) AS gmv\nFROM fact_orders f\nJOIN dim_user u ON u.user_id = f.user_id\nJOIN dim_product p ON p.product_id = f.product_id\nWHERE f.pay_status = 'SUCCESS' AND u.province IN ('广东', '浙江') AND f.order_amount BETWEEN 100.0 AND 5000.0\nGROUP BY p.category\nORDER BY gmv DESC\nLIMIT 100"
+  },
+  {
+    "id": "Q11",
+    "question": "2024年6月成功订单GMV的环比是多少？",
+    "scenario": "环比(mom)对比：当前月与上一个月的增长/下降",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [],
+      "time_filter": {
+        "granularity": "day",
+        "range_type": "absolute",
+        "absolute": {
+          "start": "2024-06-01",
+          "end": "2024-07-01"
+        },
+        "comparison": "mom"
+      },
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-05-01 00:00:00' AND f.order_time < TIMESTAMP '2024-06-01 00:00:00'\n)\nSELECT cur.gmv AS gmv, prev.gmv AS gmv_prev, (cur.gmv - prev.gmv) / NULLIF(prev.gmv, 0) AS gmv_mom\nFROM cur, prev\nLIMIT 100"
+  },
+  {
+    "id": "Q12",
+    "question": "2024年6月成功订单GMV的同比是多少？",
+    "scenario": "同比(yoy)对比：当前周期与去年同期的增长/下降",
+    "dsl": {
+      "metrics": [
+        {
+          "kind": "aggregate",
+          "field": "order_amount",
+          "agg": "sum",
+          "alias": "gmv"
+        }
+      ],
+      "dimensions": [],
+      "time_filter": {
+        "granularity": "day",
+        "range_type": "absolute",
+        "absolute": {
+          "start": "2024-06-01",
+          "end": "2024-07-01"
+        },
+        "comparison": "yoy"
+      },
+      "filters": [
+        {
+          "field": "pay_status",
+          "operator": "eq",
+          "value": "SUCCESS"
+        }
+      ],
+      "order_by": [],
+      "limit": 100
+    },
+    "sql": "WITH cur AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2024-06-01 00:00:00' AND f.order_time < TIMESTAMP '2024-07-01 00:00:00'\n),\nprev AS (\n  SELECT SUM(f.order_amount) AS gmv\n  FROM fact_orders f\n  WHERE f.pay_status = 'SUCCESS' AND f.order_time >= TIMESTAMP '2023-06-01 00:00:00' AND f.order_time < TIMESTAMP '2023-07-01 00:00:00'\n)\nSELECT cur.gmv AS gmv, prev.gmv AS gmv_prev, (cur.gmv - prev.gmv) / NULLIF(prev.gmv, 0) AS gmv_yoy\nFROM cur, prev\nLIMIT 100"
   }
 ]

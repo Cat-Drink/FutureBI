@@ -52,6 +52,35 @@ def _sub_months(d: date, n: int) -> date:
     return date(y, m, min(d.day, last_day))
 
 
+def _sub_years(d: date, n: int) -> date:
+    """按年减法（保持月日不变，闰日钳到 2 月 28）。"""
+    y = d.year - n
+    last_day = calendar.monthrange(y, d.month)[1]
+    return date(y, d.month, min(d.day, last_day))
+
+
+def _shift_window(
+    start: datetime, end: datetime, comparison: Comparison
+) -> tuple[datetime, datetime]:
+    """将当前窗口整体平移一个对比周期，得到基准窗口。
+
+    - MOM：窗口整体前移一个月；
+    - YOY：窗口整体前移一年。
+    平移后仍为半开区间 [new_start, new_end)。
+    """
+    if comparison == Comparison.MOM:
+        return (
+            datetime.combine(_sub_months(start.date(), 1), start.time()),
+            datetime.combine(_sub_months(end.date(), 1), end.time()),
+        )
+    if comparison == Comparison.YOY:
+        return (
+            datetime.combine(_sub_years(start.date(), 1), start.time()),
+            datetime.combine(_sub_years(end.date(), 1), end.time()),
+        )
+    raise CompileError(f"不支持的 comparison: {comparison!r}")
+
+
 def _resolve_window(tf: TimeFilter) -> tuple[datetime, datetime]:
     """将 TimeFilter 解析为半开时间区间 [start, end)。"""
     if tf.range_type == TimeRangeType.ABSOLUTE:
@@ -227,17 +256,10 @@ def _dimension_expr(d: Dimension, granularity: Granularity) -> tuple[str, str]:
 
 
 # --------------------------------------------------------------------------- #
-# 主编译入口
+# 表集合与 FROM/JOIN
 # --------------------------------------------------------------------------- #
-def compile_sql(dsl: QueryDSL) -> str:
-    """将 QueryDSL 编译为 DuckDB SQL 字符串（确定性、无注入）。"""
-    tf = dsl.time_filter
-    if tf is not None and tf.comparison != Comparison.NONE:
-        raise NotImplementedError(
-            "同比/环比(comparison)计算二期实现，当前仅支持 comparison=none"
-        )
-
-    # 1. 收集字段 -> 决定连接哪些表
+def _collect_tables(dsl: QueryDSL) -> set[str]:
+    """收集 DSL 引用到的所有表（用于决定 JOIN 哪些维度表）。"""
     tables: set[str] = set()
     for d in dsl.dimensions:
         tables.add(_table_for_field(d.field))
@@ -246,6 +268,93 @@ def compile_sql(dsl: QueryDSL) -> str:
     for m in dsl.metrics:
         for am in _aggregate_metrics(m):
             tables.add(_table_for_field(am.field))
+    return tables
+
+
+def _from_clause(dsl: QueryDSL) -> str:
+    tables = _collect_tables(dsl)
+    sql = f"FROM {FACT_TABLE} f"
+    joins = [JOIN_RULES[t] for t in ("dim_user", "dim_product") if t in tables]
+    if joins:
+        sql += "\n" + "\n".join(joins)
+    return sql
+
+
+# --------------------------------------------------------------------------- #
+# 对比（同比/环比）编译
+# --------------------------------------------------------------------------- #
+def _compile_with_comparison(dsl: QueryDSL) -> str:
+    """编译带 comparison 的 DSL：当前窗口 vs 基准窗口，输出增长率。
+
+    输出约定（以指标别名为 gmv、comparison=YOY 为例）：
+        gmv      当前周期值
+        gmv_prev 基准周期值
+        gmv_yoy  增长率 = (cur - prev) / NULLIF(prev, 0)
+    对 MOM 同理生成 {alias}_mom。
+    """
+    tf = dsl.time_filter
+    assert tf is not None and tf.comparison != Comparison.NONE
+
+    cur_start, cur_end = _resolve_window(tf)
+    prev_start, prev_end = _shift_window(cur_start, cur_end, tf.comparison)
+    cmp_suffix = "_mom" if tf.comparison == Comparison.MOM else "_yoy"
+
+    def _window_block(label: str, start: datetime, end: datetime) -> str:
+        metrics_sql = ", ".join(f"{_metric_expr(m)[0]} AS {_metric_expr(m)[1]}" for m in dsl.metrics)
+        where = [_filter_sql(f) for f in dsl.filters]
+        s = start.strftime("%Y-%m-%d %H:%M:%S")
+        e = end.strftime("%Y-%m-%d %H:%M:%S")
+        where.append(f"f.order_time >= TIMESTAMP '{s}' AND f.order_time < TIMESTAMP '{e}'")
+        return (
+            f"{label} AS (\n"
+            f"  SELECT {metrics_sql}\n"
+            f"  {_from_clause(dsl)}\n"
+            "  WHERE " + " AND ".join(where) + "\n"
+            ")"
+        )
+
+    selects: list[str] = []
+    for m in dsl.metrics:
+        alias = m.alias
+        selects.append(f"cur.{alias} AS {alias}")
+        selects.append(f"prev.{alias} AS {alias}_prev")
+        selects.append(f"(cur.{alias} - prev.{alias}) / NULLIF(prev.{alias}, 0) AS {alias}{cmp_suffix}")
+
+    sql = "WITH " + _window_block("cur", cur_start, cur_end)
+    sql += ",\n" + _window_block("prev", prev_start, prev_end)
+    sql += "\nSELECT " + ", ".join(selects)
+    sql += "\nFROM cur, prev"
+
+    # 排序字段：允许引用当前/基准/增长率列
+    allowed = set()
+    for m in dsl.metrics:
+        allowed.add(m.alias)
+        allowed.add(m.alias + "_prev")
+        allowed.add(m.alias + cmp_suffix)
+    if dsl.order_by:
+        parts: list[str] = []
+        for o in dsl.order_by:
+            if o.field not in allowed:
+                raise CompileError(f"order_by 字段 {o.field!r} 不是指标别名或对比列")
+            direction = "ASC" if o.direction == SortDirection.ASC else "DESC"
+            parts.append(f"{o.field} {direction}")
+        sql += "\nORDER BY " + ", ".join(parts)
+
+    sql += f"\nLIMIT {int(dsl.limit)}"
+    return sql
+
+
+# --------------------------------------------------------------------------- #
+# 主编译入口
+# --------------------------------------------------------------------------- #
+def compile_sql(dsl: QueryDSL) -> str:
+    """将 QueryDSL 编译为 DuckDB SQL 字符串（确定性、无注入）。"""
+    tf = dsl.time_filter
+    if tf is not None and tf.comparison != Comparison.NONE:
+        return _compile_with_comparison(dsl)
+
+    # 1. 收集字段 -> 决定连接哪些表
+    tables = _collect_tables(dsl)
 
     # 2. FROM + JOIN
     from_clause = f"FROM {FACT_TABLE} f"
@@ -301,3 +410,4 @@ def compile_sql(dsl: QueryDSL) -> str:
 
     sql += f"\nLIMIT {int(dsl.limit)}"
     return sql
+

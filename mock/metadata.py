@@ -25,7 +25,7 @@ FIELD_METADATA: dict[str, dict[str, str]] = {
         "order_amount": "实付金额（元），= 单价*数量 - 优惠金额",
         "discount_amount": "优惠金额（元）",
         "pay_status": "支付状态（SUCCESS=成功 / CANCELLED=取消）",
-        "order_time": "下单时间（分布在锚点日期前 90 天）",
+        "order_time": "下单时间（分布在锚点日期前约 400 天（>1 年，支撑同比/环比））",
     },
 }
 
