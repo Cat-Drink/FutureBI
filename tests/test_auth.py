@@ -25,6 +25,27 @@ def test_password_hash_roundtrip():
     assert not verify_password("s3cret", "")
 
 
+def test_password_hash_uses_per_user_salt():
+    """P0-5：同一口令两次哈希必须不同（每用户随机盐，杜绝彩虹表预计算）。"""
+    a, b = hash_password("s3cret"), hash_password("s3cret")
+    assert a != b
+    # 新格式：pbkdf2_sha256$iter$salt_hex$hash_hex（4 段，盐与迭代次数编码其中）
+    parts = a.split("$")
+    assert len(parts) == 4 and parts[0] == "pbkdf2_sha256"
+    assert int(parts[1]) >= 100_000
+    assert len(parts[2]) == 32  # 16 字节盐的 hex
+    assert len(parts[3]) == 64  # SHA-256 摘要 hex
+
+
+def test_password_hash_verifies_legacy_fixed_salt_format():
+    """P0-5：旧版固定盐 64 位十六进制哈希仍可校验（向后兼容）。"""
+    import hashlib
+
+    legacy = hashlib.pbkdf2_hmac("sha256", b"s3cret", b"futurebi-salt-v1", 200_000).hex()
+    assert verify_password("s3cret", legacy)
+    assert not verify_password("wrong", legacy)
+
+
 def test_identity_store_authenticates_default_users():
     store = IdentityStore()
     user = store.authenticate("admin", "admin123")

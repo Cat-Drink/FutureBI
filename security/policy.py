@@ -30,9 +30,13 @@ class Policy:
 # 全表集合
 ALL_TABLES = frozenset({"fact_orders", "fact_refunds", "dim_user", "dim_product"})
 
-
-def _province_filter(provinces: list[str]) -> dict[str, Any]:
-    return {"field": "province", "operator": "in", "value": provinces}
+# 主体属性表（P0-3）：供参数化 RLS 谓词引用（{"field": ..., "operator": ..., "param": "principal.provinces"}）。
+# 生产环境由 security.policy_loader.refresh_policies() 从 config/policies.json 重建，
+# 此处为内置回退。
+PRINCIPAL_ATTRS: dict[str, dict[str, list[str]]] = {
+    "analyst": {"provinces": ["广东", "浙江", "江苏", "北京", "上海"]},
+    "restricted": {"provinces": ["广东"]},
+}
 
 
 POLICIES: dict[str, Policy] = {
@@ -41,17 +45,17 @@ POLICIES: dict[str, Policy] = {
         name="admin",
         allowed_tables=ALL_TABLES,
     ),
-    # 分析师：全表、无敏感列限制，但只能看 5 个省（RLS）
+    # 分析师：全表、无敏感列限制，但只能看 5 个省（RLS 参数化模板）
     "analyst": Policy(
         name="analyst",
         allowed_tables=ALL_TABLES,
-        row_filters=(_province_filter(["广东", "浙江", "江苏", "北京", "上海"]),),
+        row_filters=({"field": "province", "operator": "in", "param": "principal.provinces"},),
     ),
     # 受限运营：不能看退款表，不能看优惠金额/退款金额，只能看广东
     "restricted": Policy(
         name="restricted",
         allowed_tables=frozenset({"fact_orders", "dim_user", "dim_product"}),
         forbidden_columns=frozenset({"discount_amount", "refund_amount"}),
-        row_filters=(_province_filter(["广东"]),),
+        row_filters=({"field": "province", "operator": "in", "param": "principal.provinces"},),
     ),
 }

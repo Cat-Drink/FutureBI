@@ -1,0 +1,43 @@
+import os
+import tempfile
+
+import duckdb
+
+from exec.guards import UnsafeSqlError, assert_read_only_sql
+
+tests = [
+    ("read_csv", "SELECT * FROM read_csv('C:/windows/win.ini')"),
+    ("read_csv_glob", "SELECT * FROM read_csv_glob('C:/windows/*.ini')"),
+    ("read_json", "SELECT * FROM read_json('C:/windows/win.ini')"),
+    ("read_parquet", "SELECT * FROM read_parquet('x.parquet')"),
+    ("comment_delete", "/*x*/DELETE FROM t"),
+    ("multi", "SELECT 1; SELECT 2"),
+    ("normal_select", "SELECT 1 AS a"),
+]
+for name, sql in tests:
+    try:
+        assert_read_only_sql(sql)
+        print(f"{name}: ACCEPT")
+    except UnsafeSqlError as e:
+        print(f"{name}: REJECT ({e})")
+
+print()
+with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as f:
+    f.write("secret_id,secret_value\n1,TOPSECRET-PWNED\n")
+    path = f.name
+print("written secret to", path)
+conn = duckdb.connect()
+try:
+    rows = conn.execute(f"SELECT * FROM read_csv('{path}')").fetchall()
+    print("read_csv EXFILTRATED:", rows)
+finally:
+    conn.close()
+    os.unlink(path)
+
+# 也验证一下通过 web/service 入口是否可达（构造绕过 assert 但属读文件的 SQL）
+print()
+try:
+    assert_read_only_sql("SELECT * FROM read_csv('C:/windows/win.ini')")
+    print("CONCLUSION: P0-1 CONFIRMED - read_csv bypasses read-only check")
+except UnsafeSqlError:
+    print("CONCLUSION: P0-1 NOT REPRODUCED")

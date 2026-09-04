@@ -23,13 +23,8 @@ from datetime import date, datetime, timedelta
 from datetime import time as dtime
 
 from config import settings
-from semantic.catalog import (
-    ALIASES,
-    COLUMNS,
-    FACT_JOIN_RULES,
-    FACT_TABLE,
-    JOIN_RULES,
-)
+from semantic import catalog
+from semantic.catalog import JoinRule
 from semantic.dsl_schema import (
     AggFunc,
     AggregateMetric,
@@ -157,17 +152,17 @@ def _resolve_window(tf: TimeFilter) -> tuple[datetime, datetime]:
 # 字段与字面量
 # --------------------------------------------------------------------------- #
 def _table_for_field(field: str) -> str:
-    meta = COLUMNS.get(field)
+    meta = catalog.COLUMNS.get(field)
     if meta is None:
         raise CompileError(f"未登记的字段: {field!r}，只能引用语义目录中的逻辑字段")
     return meta.table
 
 
 def _qualify(field: str) -> str:
-    meta = COLUMNS.get(field)
+    meta = catalog.COLUMNS.get(field)
     if meta is None:
         raise CompileError(f"未登记的字段: {field!r}")
-    return f"{ALIASES[meta.table]}.{meta.column}"
+    return f"{catalog.ALIASES[meta.table]}.{meta.column}"
 
 
 def _check_scalar_type(value, dtype: str) -> None:
@@ -205,10 +200,10 @@ def _literal(value, dtype: str) -> str:
 
 
 def _filter_sql(f: Filter) -> str:
-    meta = COLUMNS.get(f.field)
+    meta = catalog.COLUMNS.get(f.field)
     if meta is None:
         raise CompileError(f"未登记的过滤字段: {f.field!r}")
-    col = f"{ALIASES[meta.table]}.{meta.column}"
+    col = f"{catalog.ALIASES[meta.table]}.{meta.column}"
     dtype = meta.dtype
 
     if f.operator == FilterOperator.IN:
@@ -291,11 +286,11 @@ def _window_expr(wm: WindowMetric, order_expr: str) -> str:
 
 
 def _dimension_expr(d: Dimension, granularity: Granularity) -> tuple[str, str]:
-    meta = COLUMNS.get(d.field)
+    meta = catalog.COLUMNS.get(d.field)
     if meta is None:
         raise CompileError(f"未登记的维度字段: {d.field!r}")
     alias = d.alias or d.field
-    qual = f"{ALIASES[meta.table]}.{meta.column}"
+    qual = f"{catalog.ALIASES[meta.table]}.{meta.column}"
     if d.field == "order_time":
         expr = f"date_trunc('{granularity.value}', {qual})"
     else:
@@ -329,18 +324,31 @@ def _collect_tables(dsl: QueryDSL) -> set[str]:
     return tables
 
 
+def _join_sql(table: str, rule: JoinRule) -> str:
+    """把受控连接声明渲染为 SQL（P0-2：目录只声明 join type + 字段对，不再裸拼 SQL）。
+
+    on 的每个字段对是 (joined_table_col, fact_table_col)，
+    渲染为 `{joined_alias}.{joined_col} = {fact_alias}.{fact_col}`。
+    """
+    alias = catalog.ALIASES.get(table, table)
+    fact_alias = catalog.ALIASES.get(catalog.FACT_TABLE, catalog.FACT_TABLE)
+    conditions = " AND ".join(f"{alias}.{jcol} = {fact_alias}.{fcol}" for jcol, fcol in rule.on)
+    keyword = "LEFT JOIN" if rule.join_type == "left" else "JOIN"
+    return f"{keyword} {table} {alias} ON {conditions}"
+
+
 def _from_clause(dsl: QueryDSL) -> str:
     tables = _collect_tables(dsl)
-    sql = f"FROM {FACT_TABLE} f"
+    sql = f"FROM {catalog.FACT_TABLE} f"
     joins: list[str] = []
     # 维度表受控连接
-    for dim in ("dim_user", "dim_product"):
+    for dim, rule in catalog.JOIN_RULES.items():
         if dim in tables:
-            joins.append(JOIN_RULES[dim])
+            joins.append(_join_sql(dim, rule))
     # 第二事实表受控连接（1:1 LEFT JOIN，无扇出放大）
-    for fact, rule in FACT_JOIN_RULES.items():
+    for fact, rule in catalog.FACT_JOIN_RULES.items():
         if fact in tables:
-            joins.append(rule)
+            joins.append(_join_sql(fact, rule))
     if joins:
         sql += "\n" + "\n".join(joins)
     return sql

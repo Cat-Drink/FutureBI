@@ -53,6 +53,9 @@ MAX_RESULT_ROWS: int = int(os.getenv("MAX_RESULT_ROWS", "20000"))
 SQL_SELF_HEAL_MAX_RETRIES: int = int(os.getenv("SQL_SELF_HEAL_MAX_RETRIES", "1"))
 # 澄清槽位上下文 TTL（秒）：用户回答"最近30天"等短语的合并窗口（P0-5）
 CLARIFY_SLOT_TTL: int = int(os.getenv("CLARIFY_SLOT_TTL", "1800"))
+# 执行层并发闸（P0-6）：只读连接池容量 + 全局并发信号量（"排队 + 熔断"双保险）
+DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "4"))
+MAX_CONCURRENT_QUERIES: int = int(os.getenv("MAX_CONCURRENT_QUERIES", "4"))
 
 # --------------------------------------------------------------------------- #
 # 审计与结构化日志（P0）—— 见 audit/ 包

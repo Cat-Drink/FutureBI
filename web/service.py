@@ -33,11 +33,12 @@ from exec.guards import (
     UnsafeSqlError,
     execute_sql,
 )
+from exec.pool import ReadOnlyConnectionPool
 from present.explain import explain
 from present.viz import viz_config
 from security.errors import SecurityError
 from security.guard import apply_policy
-from semantic.catalog import COLUMNS
+from semantic import catalog
 from semantic.dsl_schema import QueryDSL, RatioMetric, WindowMetric
 
 logger = get_logger("web.service")
@@ -66,6 +67,22 @@ def _friendly_error(exc: Exception) -> str:
 
 _default_store: AuditStore | None = None
 _store_lock = threading.Lock()
+
+# P0-6 并发闸：全局信号量限制同时执行的查询数（超配额排队等待，配合连接池）
+_query_gate = threading.BoundedSemaphore(settings.MAX_CONCURRENT_QUERIES)
+
+_default_pool: ReadOnlyConnectionPool | None = None
+_pool_lock = threading.Lock()
+
+
+def _default_db_pool() -> ReadOnlyConnectionPool:
+    """进程内复用的只读连接池（惰性初始化，容量取 settings.DB_POOL_SIZE）。"""
+    global _default_pool
+    if _default_pool is None:
+        with _pool_lock:
+            if _default_pool is None:
+                _default_pool = ReadOnlyConnectionPool(settings.DB_PATH, settings.DB_POOL_SIZE)
+    return _default_pool
 
 
 def _default_audit_store() -> AuditStore | None:
@@ -113,7 +130,7 @@ def _referenced_fields(dsl: QueryDSL) -> set[str]:
 def _retrieval_context(dsl: QueryDSL) -> dict[str, Any]:
     """从 DSL 派生"检索上下文"：本次查询命中的语义目录字段与物理表。"""
     fields = _referenced_fields(dsl)
-    tables = sorted({COLUMNS[f].table for f in fields if f in COLUMNS})
+    tables = sorted({catalog.COLUMNS[f].table for f in fields if f in catalog.COLUMNS})
     return {"fields": sorted(fields), "tables": tables}
 
 
@@ -254,16 +271,21 @@ def run_query(
             result["mode"] = "degraded" if degraded else "normal"
             result["dsl"] = dsl.model_dump(mode="json")
 
+            # P0-6：未显式注入连接时，从只读连接池取用（用完归还），
+            # 并用全局信号量限制并发查询数（超配额排队，避免打满单机实例）。
             own_conn = conn is None
+            pool = None
             if own_conn:
-                conn = duckdb.connect(str(settings.DB_PATH), read_only=True)
+                pool = _default_db_pool()
+                conn = pool.acquire()
             try:
-                final_dsl, sql, exec_result, rewrites = _execute_with_self_heal(
-                    effective_query, dsl, conn, principal=principal
-                )
+                with _query_gate:
+                    final_dsl, sql, exec_result, rewrites = _execute_with_self_heal(
+                        effective_query, dsl, conn, principal=principal
+                    )
             finally:
-                if own_conn:
-                    conn.close()
+                if own_conn and pool is not None:
+                    pool.release(conn)
 
             dsl = final_dsl
             result["dsl"] = dsl.model_dump(mode="json")
@@ -362,9 +384,14 @@ def run_query(
 
 
 def ensure_db() -> None:
-    """确保本地 DuckDB 数仓文件存在，缺失时幂等重建。"""
-    if settings.DB_PATH.exists():
-        return
-    from mock.init_duckdb import main as init_db
+    """确保本地 DuckDB 数仓文件存在，缺失时幂等重建；随后重建语义目录（P0-2）
+    与权限策略（P0-3），使"新增表/字段/权限"全部走配置而非改代码。"""
+    if not settings.DB_PATH.exists():
+        from mock.init_duckdb import main as init_db
 
-    init_db()
+        init_db()
+    from security.policy_loader import refresh_policies
+    from semantic.catalog_loader import refresh_catalog
+
+    refresh_catalog(db_path=settings.DB_PATH)
+    refresh_policies()

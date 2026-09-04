@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import duckdb
+import sqlglot
+from sqlglot import exp
 
 # --------------------------------------------------------------------------- #
 # 异常体系
@@ -69,6 +71,12 @@ class UnsafeSqlError(RuntimeError):
     code = "unsafe_sql"
 
 
+# 语句级黑名单：DDL/DML/外部资源语句。
+# 除既有 INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/ATTACH/PRAGMA 外，补充：
+# - COPY/EXPORT/IMPORT：DuckDB 可把任意文件导入导出（COPY ... TO/IMPORT DATABASE），
+#   会读写本地磁盘（数据外泄/污染），必须拒绝；
+# - INSTALL/LOAD：加载外部扩展（可执行任意 DuckDB 扩展代码）；
+# - CALL/DETACH/SET/RESET/VACUUM/CHECKPOINT：语句形态非只读 SELECT，编译器永不生成。
 _FORBIDDEN_SQL_KEYWORDS = {
     "INSERT",
     "UPDATE",
@@ -77,8 +85,57 @@ _FORBIDDEN_SQL_KEYWORDS = {
     "ALTER",
     "CREATE",
     "ATTACH",
+    "DETACH",
     "PRAGMA",
+    "COPY",
+    "EXPORT",
+    "IMPORT",
+    "INSTALL",
+    "LOAD",
+    "CALL",
+    "SET",
+    "RESET",
+    "VACUUM",
+    "CHECKPOINT",
 }
+
+# 函数调用级黑名单：DuckDB 表函数可读取任意本地文件/外部数据源（P0-1 实锤）。
+# 匹配"标识符（"的函数调用形态，避免误伤 AS "read_csv" 这类被引号包裹的列别名。
+# 家族覆盖（渗透测试实锤 + 已装 DuckDB 函数全量枚举）：
+# - read_*/write_*    ：read_csv/read_json/read_parquet/read_ndjson/read_duckdb/read_text/
+#                        read_blob/write_csv 等任意外部文件读写；
+# - parquet_/sqlite_/postgres_/mysql_/mongo_/delta_/iceberg_/excel_/arrow_/http_/
+#   azure_/s3_/gcs_/hdfs_：文件/外部数据源扫描（parquet_scan/parquet_kv_metadata/
+#                        parquet_schema/parquet_file_metadata/sqlite_scan/sqlite_query/
+#                        postgres_query/pandas_scan/arrow_scan 等）；
+# - *_scan/*_query/*_execute/*_glob/*_http：任意外部源扫描与路径枚举；
+# - glob/query/query_table/json_execute_serialized_sql/write_log：路径枚举、把字符串
+#   当 SQL 执行（可嵌套 read_* 形成二次绕过）、外部写。
+_FORBIDDEN_FUNCTION_CALL_RE = re.compile(
+    r"\b(?:"
+    r"(?:read_|write_|parquet_|sqlite_|postgres_|mysql_|mongo_|delta_|iceberg_|excel_|arrow_"
+    r"|http_|azure_|s3_|gcs_|hdfs_)[a-z0-9_]*"
+    r"|[a-z0-9_]*(?:_scan|_query|_execute|_glob|_http)"
+    r"|glob|query|query_table|json_execute_serialized_sql|write_log"
+    r")\s*\(",
+    re.IGNORECASE,
+)
+
+# 函数名级黑名单（AST 结构化校验使用）：对解析出的函数名做整名匹配，与上面的
+# 调用形态正则同源，保证无论函数是 typed（ReadCSV/ParquetScan）还是 Anonymous
+# （parquet_kv_metadata 等），都能被同一套家族规则拦截。
+_FORBIDDEN_FUNCTION_RE = re.compile(
+    r"^(?:"
+    r"(?:read_|write_|parquet_|sqlite_|postgres_|mysql_|mongo_|delta_|iceberg_|excel_|arrow_"
+    r"|http_|azure_|s3_|gcs_|hdfs_)[a-z0-9_]*"
+    r"|[a-z0-9_]*(?:_scan|_query|_execute|_glob|_http)"
+    r"|glob|query|query_table|json_execute_serialized_sql|write_log"
+    r")$",
+    re.IGNORECASE,
+)
+
+# DuckDB 字符串字面量表引用（FROM '<path>'）：等价直接读取本地文件，拒绝。
+_FROM_STRING_TABLE_RE = re.compile(r"""\bFROM\s*['"]""", re.IGNORECASE)
 
 
 def _strip_sql_comments(sql: str) -> str:
@@ -123,8 +180,65 @@ def _sql_code_without_literals(sql: str) -> str:
     return "".join(out)
 
 
+def _func_name(node: exp.Func) -> str | None:
+    """从 sqlglot 函数节点提取规范化函数名（小写）。
+
+    typed 函数（ReadCSV/ParquetScan 等）用 sql_name()；未知函数在 sqlglot 里是
+    Anonymous(this=Var)，真实函数名在 this.name。别名/引号包裹不影响提取。
+    """
+    if isinstance(node, exp.Anonymous):
+        name = getattr(node.this, "name", None)
+        return name.lower() if isinstance(name, str) else None
+    name = node.sql_name()
+    return name.lower() if name else None
+
+
+def _assert_read_only_structure(sql: str) -> None:
+    """sqlglot AST 结构化只读校验（P0-1 主防线，取代纯正则黑名单）。
+
+    四个条件（全部 fail-closed）：
+    1. 恰好解析为一条语句；
+    2. 根节点必须是 SELECT / UNION（WITH 是 Select 的属性，自然覆盖）；
+    3. 全树不允许出现被禁函数（read_*/parquet_*/sqlite_*/*_scan/*_query 等家族）；
+    4. 全树不允许引号/字符串字面量表引用（FROM '<path>' / FROM "path"）与
+       SELECT INTO 写表语句。
+    """
+    try:
+        statements = sqlglot.parse(sql, read="duckdb")
+    except sqlglot.errors.ParseError as exc:
+        raise UnsafeSqlError(f"SQL 解析失败，拒绝执行: {exc}") from exc
+    if len(statements) != 1:
+        raise UnsafeSqlError("拒绝执行多语句 SQL")
+    root = statements[0]
+    if not isinstance(root, (exp.Select, exp.Union)):
+        raise UnsafeSqlError(f"仅允许执行 SELECT 只读查询（实际为 {type(root).__name__}）")
+    for node in root.walk():
+        if isinstance(node, exp.Into):
+            raise UnsafeSqlError("拒绝 SELECT INTO 写表语句")
+        if isinstance(node, exp.Func):
+            name = _func_name(node)
+            if name and _FORBIDDEN_FUNCTION_RE.fullmatch(name):
+                raise UnsafeSqlError(
+                    f"检测到被禁止的表函数调用（{name} 可读取外部文件/数据源，已拒绝）"
+                )
+        elif isinstance(node, exp.Table):
+            this = node.this
+            if isinstance(this, exp.Identifier) and this.quoted:
+                raise UnsafeSqlError(f"拒绝字符串/引号字面量表引用: {node.sql()}")
+
+
 def assert_read_only_sql(sql: str) -> None:
-    """硬断言 SQL 是单条 SELECT/WITH，拒绝 DDL/DML 与多语句。"""
+    """硬断言 SQL 是单条只读 SELECT/WITH（P0-1 加固）。
+
+    四层防线（全部 fail-closed）：
+    1. 语句形态：仅 SELECT/WITH 开头、无分号堆叠；
+    2. 语句级黑名单：DDL/DML/COPY/EXPORT/IMPORT/INSTALL/LOAD 等外部资源语句；
+    3. 函数调用级黑名单：read_* / *_scan / *_query / parquet_* / glob / query 等
+       可读取任意本地文件或外部数据源的表函数（渗透测试已实锤 read_csv 可外泄文件），
+       以及 FROM '<path>' 字符串字面量表引用（DuckDB 等价直接读文件）；
+    4. sqlglot AST 结构性校验：根节点必须为 SELECT，全树拒绝被禁函数家族、
+       引号字符串表引用与 SELECT INTO（取代纯正则黑名单，杜绝引号/别名/嵌套绕过）。
+    """
     code = _sql_code_without_literals(_strip_sql_comments(sql))
     tokens = code.strip().split()
     if not tokens or tokens[0].upper() not in {"SELECT", "WITH"}:
@@ -135,6 +249,13 @@ def assert_read_only_sql(sql: str) -> None:
     for keyword in _FORBIDDEN_SQL_KEYWORDS:
         if re.search(rf"\b{keyword}\b", upper):
             raise UnsafeSqlError(f"检测到被禁止的 SQL 关键字: {keyword}")
+    if _FORBIDDEN_FUNCTION_CALL_RE.search(code):
+        raise UnsafeSqlError(
+            "检测到被禁止的表函数调用（read_*/ *_scan/glob/query 可读取外部文件，已拒绝）"
+        )
+    if _FROM_STRING_TABLE_RE.search(_strip_sql_comments(sql)):
+        raise UnsafeSqlError("拒绝字符串字面量表引用（FROM '<path>' 等价直接读取本地文件）")
+    _assert_read_only_structure(sql)
 
 
 # --------------------------------------------------------------------------- #

@@ -137,6 +137,14 @@ def test_retrieve_empty_for_unrelated():
     assert retrieve("今天天气怎么样？") == []
 
 
+def test_retrieve_semantic_without_exact_alias():
+    """P0-4：无精确别名、仅有语义相近表述时，TF-IDF 稀疏向量余弦召回正确文档。"""
+    docs = retrieve("平均每单的金额怎么算")
+    assert docs and docs[0].key == "avg_order_amount"
+    docs2 = retrieve("每个用户的消费水平")
+    assert docs2 and docs2[0].key == "arpu"
+
+
 # --------------------------------------------------------------------------- #
 # web.service.run_query 路由响应
 # --------------------------------------------------------------------------- #

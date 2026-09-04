@@ -4,19 +4,19 @@
       "display_name": "系统管理员",
       "principal": "admin",
       "roles": ["admin"],
-      "password_hash": "c51d8b1eb8b673c9c82da9525ffe83b073bc33fc99ba1018b22a98bde1ad4774"
+      "password_hash": "pbkdf2_sha256$200000$fc55e14ae117d5027cfbbbf94ea0d19f$bed75f72cb74d17b0fe2b16421ce4cd27c176bab7357d351073ade0bd7e42846"
     },
     "analyst": {
       "display_name": "分析师",
       "principal": "analyst",
       "roles": ["analyst"],
-      "password_hash": "62ed6d0623d447181fb0d119dedb72256e3683a0516e441168cb08b33832c915"
+      "password_hash": "pbkdf2_sha256$200000$27b3ce72cf390f3a7cbcfeb06028a564$8eb1244dd94f853669345f7eadabb2273433a9ef5d6c46b3c24fe1ee4b56a7e8"
     },
     "bob": {
       "display_name": "受限运营",
       "principal": "restricted",
       "roles": ["ops"],
-      "password_hash": "088cf380cabf52cb62501ede585755a298b09882d8e0a84315470e395f336bff"
+      "password_hash": "pbkdf2_sha256$200000$daf5134f66c2061ec3ae1481688ea83b$1d28e3652ceb7020a6979217b0554a988258db553949c8d242411fe0becfdf3f"
     }
   }
 }

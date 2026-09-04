@@ -1,3 +1,4 @@
 pydantic>=2.6
 duckdb>=0.10
 python-dotenv>=1.0
+sqlglot>=25.0

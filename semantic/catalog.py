@@ -7,6 +7,11 @@
 - FACT_TABLE 是主事实表（查询锚点，FROM 主表）；
 - 第二事实表（如 fact_refunds）通过 FACT_JOIN_RULES 受控连接，且与主事实表
   在业务上保证 1:1（每订单至多一条退款），避免一对多扇出放大聚合结果。
+
+数据驱动（P0-2）：本文件的默认目录只是"内置回退"。生产启动时由
+semantic.catalog_loader.refresh_catalog() 从 DuckDB information_schema 元数据 +
+config/semantic.yaml 覆写重建目录（改配置即可新增表/字段，不再需要改 Python）。
+compiler / guard 一律通过 `catalog.XXX` 动态读取本模块当前状态。
 """
 
 from __future__ import annotations
@@ -21,7 +26,20 @@ class FieldMeta:
     dtype: str  # 用于字面量安全转义：str / int / float / bool / timestamp
 
 
-# 逻辑字段 -> 物理字段
+@dataclass(frozen=True)
+class JoinRule:
+    """受控连接声明（P0-2：不再裸拼 SQL）。
+
+    - join_type：inner / left；
+    - on：一或多个 (joined_table_col, fact_table_col) 字段对，
+      渲染为 `{joined_alias}.{col1} = {fact_alias}.{col2}`。
+    """
+
+    join_type: str
+    on: tuple[tuple[str, str], ...] = ()
+
+
+# 逻辑字段 -> 物理字段（内置默认目录；生产环境由 catalog_loader 从元数据+YAML 重建）
 COLUMNS: dict[str, FieldMeta] = {
     # fact_orders（主事实表）
     "order_id": FieldMeta("fact_orders", "order_id", "int"),
@@ -61,12 +79,12 @@ FACT_TABLE: str = "fact_orders"
 FACT_TABLES: tuple[str, ...] = ("fact_orders", "fact_refunds")
 
 # 受控连接规则：只允许从主事实表星型连接维度表
-JOIN_RULES: dict[str, str] = {
-    "dim_user": "JOIN dim_user u ON u.user_id = f.user_id",
-    "dim_product": "JOIN dim_product p ON p.product_id = f.product_id",
+JOIN_RULES: dict[str, JoinRule] = {
+    "dim_user": JoinRule("inner", (("user_id", "user_id"),)),
+    "dim_product": JoinRule("inner", (("product_id", "product_id"),)),
 }
 
 # 第二事实表 -> 主事实表 的受控连接（LEFT JOIN，业务上 1:1，无扇出）
-FACT_JOIN_RULES: dict[str, str] = {
-    "fact_refunds": "LEFT JOIN fact_refunds r ON r.order_id = f.order_id",
+FACT_JOIN_RULES: dict[str, JoinRule] = {
+    "fact_refunds": JoinRule("left", (("order_id", "order_id"),)),
 }

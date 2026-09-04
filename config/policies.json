@@ -1,0 +1,24 @@
+{
+  "principal_attrs": {
+    "analyst": { "provinces": ["广东", "浙江", "江苏", "北京", "上海"] },
+    "restricted": { "provinces": ["广东"] }
+  },
+  "policies": {
+    "admin": {
+      "allowed_tables": ["fact_orders", "fact_refunds", "dim_user", "dim_product"]
+    },
+    "analyst": {
+      "allowed_tables": ["fact_orders", "fact_refunds", "dim_user", "dim_product"],
+      "row_filters": [
+        { "field": "province", "operator": "in", "param": "principal.provinces" }
+      ]
+    },
+    "restricted": {
+      "allowed_tables": ["fact_orders", "dim_user", "dim_product"],
+      "forbidden_columns": ["discount_amount", "refund_amount"],
+      "row_filters": [
+        { "field": "province", "operator": "in", "param": "principal.provinces" }
+      ]
+    }
+  }
+}

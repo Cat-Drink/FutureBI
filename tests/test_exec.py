@@ -19,6 +19,7 @@ from exec.guards import (
     ResultLimitExceeded,
     SqlExecutionError,
     UnsafeSqlError,
+    assert_read_only_sql,
     execute_sql,
     parse_scan_rows,
 )
@@ -145,3 +146,104 @@ def test_engine_error_wrapped_on_real_execution(big_conn):
     with pytest.raises(SqlExecutionError) as excinfo:
         execute_sql(big_conn, "SELECT nonexistent_column FROM big")
     assert "Binder Error" in str(excinfo.value)
+
+
+def test_unsafe_sql_rejects_table_functions(big_conn):
+    """P0-1：文件表函数（read_csv/read_json/read_parquet/read_duckdb/glob 等）应被只读白名单拒绝。"""
+    for sql in (
+        "SELECT * FROM read_csv('data.csv')",
+        "SELECT * FROM read_csv_glob('*.csv')",
+        "SELECT * FROM read_json('data.json')",
+        "SELECT * FROM read_parquet('data.parquet')",
+        "SELECT * FROM read_duckdb('other.db')",
+        "SELECT * FROM glob('*.parquet')",
+        "SELECT * FROM parquet_scan('data.parquet')",
+        "SELECT * FROM read_text('data.txt')",
+        "SELECT * FROM sqlite_scan('x.db', 't')",
+        "SELECT * FROM query('SELECT 1')",
+        "SELECT * FROM query_table('t')",
+    ):
+        with pytest.raises(UnsafeSqlError):
+            execute_sql(big_conn, sql)
+
+
+def test_unsafe_sql_rejects_copy_export_import(big_conn):
+    """P0-1：COPY/EXPORT/IMPORT 等语句导致文件读写，应被拒绝。"""
+    for sql in (
+        "COPY (SELECT 1) TO 'x.csv'",
+        "COPY fact_orders TO 'fact_orders.csv'",
+        "EXPORT DATABASE 'dir'",
+        "IMPORT DATABASE 'dir'",
+        "INSTALL 'http://example.com/extension'",
+        "LOAD 'extension'",
+    ):
+        with pytest.raises(UnsafeSqlError):
+            execute_sql(big_conn, sql)
+
+
+def test_unsafe_sql_rejects_string_table(big_conn):
+    """P0-1：DuckDB 支持 FROM '<file>' 读取本地文件，应被拒绝。"""
+    for sql in (
+        "SELECT * FROM 'C:/windows/win.ini'",
+        "SELECT * FROM 'data.csv'",
+        "SELECT * FROM 'data.json'",
+    ):
+        with pytest.raises(UnsafeSqlError):
+            execute_sql(big_conn, sql)
+
+
+def test_unsafe_sql_rejects_metadata_and_query_functions(big_conn):
+    """P0-1：parquet 元数据函数 / 外部库 query / 引号函数名 / SELECT INTO 等新绕过面拒绝。"""
+    for sql in (
+        "SELECT * FROM parquet_kv_metadata('x.parquet')",
+        "SELECT * FROM parquet_schema('x.parquet')",
+        "SELECT * FROM parquet_file_metadata('x.parquet')",
+        "SELECT * FROM parquet_metadata('x.parquet')",
+        "SELECT * FROM sqlite_query('x.db', 'SELECT 1')",
+        "SELECT * FROM postgres_query('dbname=x', 'SELECT 1')",
+        "SELECT * FROM mysql_query('dbname=x', 'SELECT 1')",
+        "SELECT * FROM mongo_scan('mongodb://x', 'db', 'c')",
+        "SELECT * FROM json_execute_serialized_sql('{\"statements\":[]}')",
+        "SELECT * FROM write_log('evil')",
+        "SELECT * FROM \"read_csv\"('C:/windows/win.ini')",
+        "SELECT * FROM \"parquet_scan\"('x.parquet')",
+        "SELECT 1 INTO t",
+        "SELECT * FROM $$C:/windows/win.ini$$",
+        "SELECT * FROM (SELECT * FROM read_csv('x')) AS t",
+    ):
+        with pytest.raises(UnsafeSqlError):
+            execute_sql(big_conn, sql)
+
+
+def test_unsafe_sql_allows_union_and_legit_functions(big_conn):
+    """只读 UNION 与编译器合法函数（date_trunc/generate_series 等）不应误伤。"""
+    assert_read_only_sql("SELECT 1 AS a UNION ALL SELECT 2")
+    assert_read_only_sql("SELECT date_trunc('day', order_time) AS d FROM t GROUP BY 1")
+    assert_read_only_sql(
+        "SELECT UNNEST(generate_series(TIMESTAMP '2024-01-01', TIMESTAMP '2024-01-03', "
+        "INTERVAL 1 DAY)) AS d"
+    )
+    result = execute_sql(big_conn, "SELECT 1 AS a UNION ALL SELECT 2")
+    assert len(result.rows) == 2
+
+
+def test_unsafe_sql_allows_normal_statements(big_conn):
+    """正常 SELECT/WITH、字面量分号、别名等应继续放行。"""
+    for sql in (
+        "SELECT 1 AS a",
+        "SELECT 'a;b' AS v",  # 字面量内的分号不应触发多语句检测
+        "WITH t AS (SELECT 1 AS x) SELECT x FROM t",
+        'SELECT 1 AS "read_csv"',  # 别名与关键词同名不应误伤
+    ):
+        result = execute_sql(big_conn, sql)
+        # 简单检查：列名匹配
+        cols = result.columns
+        if "AS a" in sql:
+            assert cols == ["a"]
+        elif "'a;b'" in sql:
+            assert cols == ["v"]
+        elif "WITH t" in sql:
+            assert cols == ["x"]
+        elif 'AS "read_csv"' in sql:
+            assert cols == ["read_csv"]
+        assert len(result.rows) == 1

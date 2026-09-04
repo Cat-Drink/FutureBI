@@ -12,11 +12,33 @@
 from __future__ import annotations
 
 from security.errors import SecurityError
-from security.policy import POLICIES, Policy
-from semantic.catalog import COLUMNS
+from security.policy import POLICIES, PRINCIPAL_ATTRS, Policy
+from semantic import catalog
 from semantic.dsl_schema import Filter, QueryDSL, RatioMetric, WindowMetric
 
 __all__ = ["SecurityError", "apply_policy"]
+
+
+def _resolve_row_filter(rf: dict, principal: str) -> dict:
+    """解析 RLS 参数化模板（P0-3）：把 param 按主体属性解析为实际值。
+
+    支持的 param 形态：principal.<attr>（如 principal.provinces），
+    值取自 security.policy.PRINCIPAL_ATTRS[principal][attr]。
+    无 param 的普通谓词原样返回（向后兼容）。
+    """
+    param = rf.get("param")
+    if param is None:
+        return rf
+    if not isinstance(param, str) or not param.startswith("principal."):
+        raise SecurityError(f"不支持的 RLS 参数模板: {param!r}")
+    attr = param.split(".", 1)[1]
+    attrs = PRINCIPAL_ATTRS.get(principal, {})
+    if attr not in attrs:
+        raise SecurityError(f"主体 {principal!r} 缺少 RLS 属性 {attr!r}")
+    resolved = dict(rf)
+    resolved.pop("param", None)
+    resolved["value"] = attrs[attr]
+    return resolved
 
 
 def _referenced_fields(dsl: QueryDSL) -> set[str]:
@@ -41,7 +63,7 @@ def _referenced_tables(fields: set[str]) -> set[str]:
     """字段 -> 所属物理表（未登记字段跳过，交由编译器兜底报错）。"""
     tables: set[str] = set()
     for f in fields:
-        meta = COLUMNS.get(f)
+        meta = catalog.COLUMNS.get(f)
         if meta is not None:
             tables.add(meta.table)
     return tables
@@ -72,9 +94,11 @@ def apply_policy(dsl: QueryDSL, principal: str | None) -> QueryDSL:
     if forbidden_fields:
         raise SecurityError(f"主体 {principal!r} 无权访问字段: {sorted(forbidden_fields)}")
 
-    # 行级 RLS：追加过滤条件
+    # 行级 RLS：解析参数化模板后追加过滤条件
     if policy.row_filters:
-        extra = [Filter.model_validate(rf) for rf in policy.row_filters]
+        extra = [
+            Filter.model_validate(_resolve_row_filter(rf, principal)) for rf in policy.row_filters
+        ]
         dsl = dsl.model_copy(update={"filters": list(dsl.filters) + extra})
 
     return dsl

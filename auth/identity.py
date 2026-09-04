@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,20 +24,50 @@ from config import settings
 
 # 口令哈希参数（与 auth/users.json 内哈希保持一致）
 _PBKDF2_ITERATIONS = 200_000
-_SALT = b"futurebi-salt-v1"
+_SALT_BYTES = 16
+_HASH_PREFIX = "pbkdf2_sha256"
+# 旧版固定盐（仅用于兼容升级前写入的 64 位十六进制哈希条目，不再用于新哈希）
+_LEGACY_SALT = b"futurebi-salt-v1"
 
 
-def hash_password(password: str) -> str:
-    """PBKDF2-SHA256 口令哈希（供初始化用户注册表使用）。"""
-    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _SALT, _PBKDF2_ITERATIONS).hex()
+def _pbkdf2(password: str, salt: bytes, iterations: int) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+
+
+def hash_password(password: str, salt: bytes | None = None) -> str:
+    """PBKDF2-SHA256 口令哈希（P0-5：每用户随机盐，杜绝固定盐彩虹表预计算）。
+
+    返回格式 pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>：
+    - 盐由 secrets.token_bytes(16) 每次随机生成；同一口令两次哈希结果不同；
+    - 迭代次数与盐都编码进哈希字符串，便于未来升级迭代参数而不破坏既有条目。
+    """
+    salt = salt if salt is not None else secrets.token_bytes(_SALT_BYTES)
+    digest = _pbkdf2(password, salt, _PBKDF2_ITERATIONS)
+    return f"{_HASH_PREFIX}${_PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}"
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """恒定时间口令比对；空哈希一律拒绝。"""
+    """恒定时间口令比对；空哈希一律拒绝。
+
+    兼容两种哈希格式：
+    - 新格式 pbkdf2_sha256$iter$salt_hex$hash_hex（每用户随机盐）；
+    - 旧格式 64 位十六进制（固定盐时代写入的 users.json 条目，向后兼容）。
+    """
     if not password_hash:
         return False
-    computed = hash_password(password)
-    return hmac.compare_digest(computed.encode("ascii"), password_hash.encode("ascii"))
+    parts = password_hash.split("$")
+    if len(parts) == 4 and parts[0] == _HASH_PREFIX:
+        try:
+            iterations = int(parts[1])
+            salt = bytes.fromhex(parts[2])
+            expected = bytes.fromhex(parts[3])
+        except ValueError:
+            return False
+        computed = _pbkdf2(password, salt, iterations)
+        return hmac.compare_digest(computed, expected)
+    # 旧版固定盐哈希（向后兼容）
+    legacy = _pbkdf2(password, _LEGACY_SALT, _PBKDF2_ITERATIONS).hex()
+    return hmac.compare_digest(legacy.encode("ascii"), password_hash.encode("ascii"))
 
 
 @dataclass(frozen=True)
@@ -61,19 +92,19 @@ DEFAULT_USERS: dict[str, dict[str, Any]] = {
         "display_name": "系统管理员",
         "principal": "admin",
         "roles": ["admin"],
-        "password_hash": "c51d8b1eb8b673c9c82da9525ffe83b073bc33fc99ba1018b22a98bde1ad4774",
+        "password_hash": "pbkdf2_sha256$200000$fc55e14ae117d5027cfbbbf94ea0d19f$bed75f72cb74d17b0fe2b16421ce4cd27c176bab7357d351073ade0bd7e42846",
     },
     "analyst": {
         "display_name": "分析师",
         "principal": "analyst",
         "roles": ["analyst"],
-        "password_hash": "62ed6d0623d447181fb0d119dedb72256e3683a0516e441168cb08b33832c915",
+        "password_hash": "pbkdf2_sha256$200000$27b3ce72cf390f3a7cbcfeb06028a564$8eb1244dd94f853669345f7eadabb2273433a9ef5d6c46b3c24fe1ee4b56a7e8",
     },
     "bob": {
         "display_name": "受限运营",
         "principal": "restricted",
         "roles": ["ops"],
-        "password_hash": "088cf380cabf52cb62501ede585755a298b09882d8e0a84315470e395f336bff",
+        "password_hash": "pbkdf2_sha256$200000$daf5134f66c2061ec3ae1481688ea83b$1d28e3652ceb7020a6979217b0554a988258db553949c8d242411fe0becfdf3f",
     },
 }
 
