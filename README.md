@@ -1,4 +1,4 @@
-# FutureBI
+<h1 align="center">FutureBI</h1>
 
 <p align="center">
   <b>企业级 ChatBI（Data Agent）—— 自然语言 → 受限 DSL → 确定性 SQL → DuckDB</b><br/>
