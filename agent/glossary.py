@@ -34,7 +34,15 @@ GLOSSARY: tuple[GlossaryDoc, ...] = (
     GlossaryDoc(
         key="gmv",
         title="GMV（商品交易总额）",
-        aliases=("gmv", "销售额", "成交额", "成交金额", "总销售", "总销售额"),
+        aliases=(
+            "gmv",
+            "销售额",
+            "销售总额",
+            "成交额",
+            "成交金额",
+            "总销售",
+            "总销售额",
+        ),
         definition="成功支付订单的实付金额之和；通常需限定支付状态为成功，并给定时间窗口。",
         formula="SUM(fact_orders.order_amount)",
         fields=("order_amount", "pay_status", "order_time"),

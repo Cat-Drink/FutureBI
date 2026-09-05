@@ -31,6 +31,9 @@ class MetricsRegistry:
         self._error_kinds: Counter[str] = Counter()
         # 熔断事件：查询超时 / 扫描行数熔断 / 返回行数熔断 / 不安全 SQL
         self._circuit_breakers: Counter[str] = Counter()
+        # Multi-Tool Agent：工具调用次数与失败次数
+        self._tools_called = 0
+        self._tool_errors = 0
         self._latencies: deque[float] = deque(maxlen=latency_window)
 
     # ------------------------------------------------------------------ #
@@ -73,6 +76,13 @@ class MetricsRegistry:
         with self._lock:
             self._self_heal_failures += 1
 
+    def record_tool_call(self, *, success: bool) -> None:
+        """Multi-Tool Agent 打点：每次工具调用记录成功/失败。"""
+        with self._lock:
+            self._tools_called += 1
+            if not success:
+                self._tool_errors += 1
+
     # ------------------------------------------------------------------ #
     # 聚合
     # ------------------------------------------------------------------ #
@@ -94,6 +104,15 @@ class MetricsRegistry:
                 "action_distribution": dict(self._action_counts),
                 "error_kinds": dict(self._error_kinds),
                 "circuit_breakers": dict(self._circuit_breakers),
+                "tools": {
+                    "called": self._tools_called,
+                    "errors": self._tool_errors,
+                    "error_rate": (
+                        round(self._tool_errors / self._tools_called, 4)
+                        if self._tools_called
+                        else None
+                    ),
+                },
                 "self_heal": {
                     "success": self._self_heal_success,
                     "failures": self._self_heal_failures,

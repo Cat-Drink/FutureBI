@@ -17,6 +17,8 @@ class Intent(StrEnum):
     TEXT2SQL = "text2sql"
     RAG = "rag"
     CHITCHAT = "chitchat"
+    DIRECT_ANSWER = "direct_answer"
+    CLARIFY = "clarify"
 
 
 # 口径 / 定义类问题触发词（命中即走 RAG 检索）。

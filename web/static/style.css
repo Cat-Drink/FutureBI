@@ -6,6 +6,7 @@
   --muted: #6b7280;
   --accent: #4f6ef7;
   --accent-dark: #3b56d4;
+  --mono: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -130,6 +131,25 @@ body {
 }
 
 .explain { font-size: 14.5px; line-height: 1.8; color: var(--text); }
+
+/* Agent 调度轨迹 */
+.steps .step-empty { font-size: 13px; color: var(--muted); padding: 8px 0; }
+.step-list { list-style: none; margin: 0; padding: 0; }
+.step-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.step-head { display: flex; align-items: center; gap: 8px; }
+.step-tool { font-weight: 600; font-family: var(--mono); font-size: 13px; }
+.step-badge { font-size: 11px; padding: 1px 8px; border-radius: 10px; font-weight: 600; }
+.step-badge.ok { background: #e6f7ee; color: #0b8a4a; }
+.step-badge.fail { background: #fdecec; color: #c92a2a; }
+.step-dur { margin-left: auto; font-size: 12px; color: var(--muted); }
+.step-args { margin: 8px 0 0; font-size: 12px; background: #f6f7fb; border-radius: 6px; padding: 8px; max-height: 96px; overflow: auto; }
+.step-err { margin-top: 8px; font-size: 12px; color: #c92a2a; }
+
+/* 综合洞察 + 导出下载 */
+.insight { font-size: 15px; line-height: 1.9; color: var(--text); }
+.downloads { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+.dl-link { display: inline-block; padding: 8px 14px; background: var(--accent); color: #fff; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600; }
+.dl-link:hover { opacity: 0.9; }
 
 .chart { display: flex; align-items: center; justify-content: center; min-height: 260px; }
 .chart svg { max-width: 100%; height: auto; }

@@ -9,21 +9,20 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Any
 
 import duckdb
 
 from agent.errors import PipelineError
-from agent.pipeline import rewrite_dsl, run_pipeline_with_status
+from agent.pipeline import rewrite_dsl
 from agent.router import Action, route_query
 from agent.slotfill import ClarifyContext, attempt_fill, default_slot_store, pending_kinds
+from agent.tool_agent import AgentResult, default_tool_agent
 from audit.logging import get_logger, set_request_context
 from audit.metrics import default_registry
 from audit.record import AuditRecord
 from audit.store import AuditStore
-from compiler.sql_compiler import CompileError, compile_sql
+from compiler.sql_compiler import CompileError
 from config import settings
 from exec.guards import (
     MaxRowsScannedExceeded,
@@ -34,10 +33,7 @@ from exec.guards import (
     execute_sql,
 )
 from exec.pool import ReadOnlyConnectionPool
-from present.explain import explain
-from present.viz import viz_config
 from security.errors import SecurityError
-from security.guard import apply_policy
 from semantic import catalog
 from semantic.dsl_schema import QueryDSL, RatioMetric, WindowMetric
 
@@ -63,6 +59,32 @@ def _friendly_error(exc: Exception) -> str:
     if isinstance(exc, SqlExecutionError):
         return "查询执行出错，请调整条件后重试"
     return "系统繁忙，请稍后重试"
+
+
+# 工具失败按异常类型名映射为友好提示（与 _friendly_error 同源，供工具层错误使用）
+_FRIENDLY_BY_ERROR_CLASS = {
+    "QueryTimeoutError": "查询超时，请缩小时间范围后重试",
+    "MaxRowsScannedExceeded": "查询范围过大，已自动中止，请缩小时间范围后重试",
+    "ResultLimitExceeded": "查询结果过多，请缩小查询范围后重试",
+    "SecurityError": "您无权查看该数据，请联系管理员确认权限",
+    "PipelineError": "暂时无法理解该问题，请补充时间范围或使用已定义的指标",
+    "UnsafeSqlError": "查询未通过安全校验，请调整问题后重试",
+    "CompileError": "查询条件无法编译，请调整指标或过滤条件后重试",
+    "SqlExecutionError": "查询执行出错，请调整条件后重试",
+}
+
+_CIRCUIT_BY_ERROR_CLASS = {
+    "QueryTimeoutError": "query_timeout",
+    "MaxRowsScannedExceeded": "scan_rows",
+    "ResultLimitExceeded": "result_limit",
+    "UnsafeSqlError": "unsafe_sql",
+}
+
+
+def _friendly_by_class(error_type: str | None) -> str | None:
+    if error_type is None:
+        return None
+    return _FRIENDLY_BY_ERROR_CLASS.get(error_type)
 
 
 _default_store: AuditStore | None = None
@@ -100,15 +122,6 @@ def _default_audit_store() -> AuditStore | None:
     return _default_store
 
 
-def _json_safe(value: Any) -> Any:
-    """把 DuckDB 返回值转成 JSON 可序列化类型（datetime/date/Decimal）。"""
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return float(value)
-    return value
-
-
 def _referenced_fields(dsl: QueryDSL) -> set[str]:
     """收集 DSL 引用的全部逻辑字段（指标 + 维度 + 过滤）。"""
     fields: set[str] = set()
@@ -132,54 +145,6 @@ def _retrieval_context(dsl: QueryDSL) -> dict[str, Any]:
     fields = _referenced_fields(dsl)
     tables = sorted({catalog.COLUMNS[f].table for f in fields if f in catalog.COLUMNS})
     return {"fields": sorted(fields), "tables": tables}
-
-
-def _execute_with_self_heal(
-    query: str,
-    dsl: QueryDSL,
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    principal: str | None = None,
-) -> tuple[QueryDSL, str, Any, int]:
-    """编译 + 受控执行 + SQL 自愈重写循环（P0/P1）。
-
-    编译（CompileError）或执行（SqlExecutionError：精确引擎报错 / 查询超时 /
-    扫描行数熔断 / LIMIT 硬上限）失败时，把精确报错喂回 LLM 重写 DSL 并重试
-    （至少 1 次，受 settings.SQL_SELF_HEAL_MAX_RETRIES 约束）。重写后的 DSL
-    仍会重新经过安全守卫（防权限逃逸）。未配置 LLM 或重写失败时透传原始报错，
-    绝不静默猜测。返回 (final_dsl, final_sql, ExecutionResult, rewrites)。
-    """
-    max_rewrites = settings.SQL_SELF_HEAL_MAX_RETRIES
-    current_dsl = dsl
-    rewrites = 0
-    while True:
-        try:
-            sql = compile_sql(current_dsl)
-            exec_result = execute_sql(
-                conn,
-                sql,
-                statement_timeout_ms=settings.QUERY_TIMEOUT_MS,
-                max_scan_rows=settings.MAX_SCAN_ROWS,
-                max_result_rows=settings.MAX_RESULT_ROWS,
-            )
-            return current_dsl, sql, exec_result, rewrites
-        except (CompileError, SqlExecutionError) as exc:
-            if rewrites >= max_rewrites:
-                raise
-            try:
-                rewritten = rewrite_dsl(
-                    query,
-                    current_dsl,
-                    f"{type(exc).__name__}: {exc}",
-                    attempts=1,
-                    principal=principal,
-                )
-                current_dsl = apply_policy(rewritten, principal)
-                rewrites += 1
-            except Exception:
-                # 自愈失败（无 LLM / LLM 拒绝 / 安全守卫拒绝）-> 透传原始报错
-                default_registry().record_self_heal_failure()
-                raise exc from None
 
 
 def run_query(
@@ -245,6 +210,7 @@ def run_query(
                 slot_store.clear(session_id)
             error = route.message
             result["error"] = error
+            result["steps"] = []
         elif route.action == Action.CLARIFY:
             # 保存澄清上下文，供用户短语回答时回填槽位
             if slot_store is not None:
@@ -256,20 +222,42 @@ def run_query(
                     ),
                 )
             result["clarifications"] = [c.to_dict() for c in route.clarifications]
+            result["steps"] = []
             error = route.message
             result["error"] = error
         elif route.action == Action.RAG:
+            # 口径文档检索：经 explain_glossary_tool 执行，记录调度轨迹（不触达 SQL 引擎）
             if slot_store is not None:
                 slot_store.clear(session_id)
-            result["documents"] = [d.to_dict() for d in route.documents]
-            ctx_override = {"intent": "rag", "documents": [d.key for d in route.documents]}
+            agent_result = default_tool_agent().run(effective_query, principal, request_id=rid)
+            result["steps"] = [s.to_dict() for s in agent_result.steps]
+            result["answer"] = agent_result.answer
+            result["documents"] = agent_result.documents
+
+            # P1-5: LLM clarify 路径需要回填槽位
+            if agent_result.clarifications and slot_store is not None:
+                slot_store.set(
+                    session_id,
+                    ClarifyContext(
+                        original_query=effective_query,
+                        pending=tuple(c.get("kind") for c in agent_result.clarifications),
+                    ),
+                )
+
+            result["message"] = (
+                route.message
+                if agent_result.documents
+                else "未检索到相关口径文档，请换一种表述或补充指标口径。"
+            )
+            ctx_override = {
+                "intent": "rag",
+                "documents": [d["key"] for d in agent_result.documents],
+            }
         else:
+            # TEXT2SQL：Multi-Tool Agent 调度（Plan & Select -> Execute & Guard -> Reflect）
             if slot_store is not None:
                 slot_store.clear(session_id)
-            dsl, degraded = run_pipeline_with_status(effective_query, principal)
-            result["degraded"] = degraded
-            result["mode"] = "degraded" if degraded else "normal"
-            result["dsl"] = dsl.model_dump(mode="json")
+            agent = default_tool_agent()
 
             # P0-6：未显式注入连接时，从只读连接池取用（用完归还），
             # 并用全局信号量限制并发查询数（超配额排队，避免打满单机实例）。
@@ -280,26 +268,46 @@ def run_query(
                 conn = pool.acquire()
             try:
                 with _query_gate:
-                    final_dsl, sql, exec_result, rewrites = _execute_with_self_heal(
-                        effective_query, dsl, conn, principal=principal
+                    agent_result: AgentResult = agent.run(
+                        effective_query,
+                        principal,
+                        conn=conn,
+                        executor=execute_sql,  # 模块级绑定：测试桩在调用期生效
+                        rewriter=rewrite_dsl,
+                        request_id=rid,
                     )
             finally:
                 if own_conn and pool is not None:
                     pool.release(conn)
 
-            dsl = final_dsl
-            result["dsl"] = dsl.model_dump(mode="json")
-            result["sql"] = sql
-            result["rewrites"] = rewrites
-            result["scan_rows"] = exec_result.scan_rows
-            columns = list(exec_result.columns)
-            rows = [[_json_safe(v) for v in row] for row in exec_result.rows]
-            result["columns"] = columns
-            result["rows"] = rows
-            row_count = len(rows)
-            scan_rows = exec_result.scan_rows
-            result["explanation"] = explain(dsl)
-            result["viz"] = viz_config(dsl, columns, rows)
+            result["steps"] = [s.to_dict() for s in agent_result.steps]
+            result["answer"] = agent_result.answer
+            result["chart_spec"] = agent_result.chart_spec
+            result["download_urls"] = agent_result.download_urls
+            result["degraded"] = agent_result.degraded
+            result["mode"] = "degraded" if agent_result.degraded else "normal"
+            result["rewrites"] = agent_result.rewrites
+            result["scan_rows"] = agent_result.scan_rows
+
+            if agent_result.error:
+                error = _friendly_by_class(agent_result.error_type) or "系统繁忙，请稍后重试"
+                result["error"] = error
+                result["error_detail"] = agent_result.error
+                circuit_breaker = _CIRCUIT_BY_ERROR_CLASS.get(agent_result.error_type)
+            else:
+                dsl = agent_result.dsl
+                sql = agent_result.sql
+                columns = agent_result.columns or []
+                rows = agent_result.rows or []
+                rewrites = agent_result.rewrites
+                scan_rows = agent_result.scan_rows
+                row_count = len(rows)
+                result["dsl"] = dsl.model_dump(mode="json") if dsl is not None else None
+                result["sql"] = sql
+                result["columns"] = columns
+                result["rows"] = rows
+                result["explanation"] = agent_result.explanation
+                result["viz"] = agent_result.viz
     except Exception as exc:
         error = _friendly_error(exc)
         result["error"] = error
@@ -356,6 +364,7 @@ def run_query(
         scan_rows=scan_rows,
         rewrites=rewrites,
         error=error,
+        steps=result.get("steps"),
     )
 
     store = audit_store if audit_store is not None else _default_audit_store()

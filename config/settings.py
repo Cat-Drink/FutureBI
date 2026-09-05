@@ -57,6 +57,9 @@ CLARIFY_SLOT_TTL: int = int(os.getenv("CLARIFY_SLOT_TTL", "1800"))
 DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "4"))
 MAX_CONCURRENT_QUERIES: int = int(os.getenv("MAX_CONCURRENT_QUERIES", "4"))
 
+# Multi-Tool Agent 调度上限（Max Steps：3~5 步，杜绝无限工具循环）
+MAX_AGENT_STEPS: int = int(os.getenv("MAX_AGENT_STEPS", "5"))
+
 # --------------------------------------------------------------------------- #
 # 审计与结构化日志（P0）—— 见 audit/ 包
 # --------------------------------------------------------------------------- #

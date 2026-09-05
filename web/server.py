@@ -29,7 +29,7 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from audit.logging import get_logger, get_request_id, set_request_context, setup_logging
 from audit.metrics import default_registry
@@ -39,6 +39,7 @@ from auth.ratelimit import LoginRateLimitError, default_login_limiter
 from auth.session import default_session_store
 from auth.tokens import create_token
 from config import settings
+from tools.builtins._export_store import ExportNotFoundError, default_export_store
 from web.service import ensure_db, run_query
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -49,6 +50,9 @@ MIME = {
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
     ".svg": "image/svg+xml",
+    ".csv": "text/csv; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
 }
 
 _access_logger = get_logger("web.access")
@@ -126,6 +130,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"status": "ok"})
         if parsed.path == "/api/metrics":
             return self._get_metrics()
+        if parsed.path.startswith("/api/export/"):
+            return self._get_export(parsed.path[len("/api/export/") :])
         if parsed.path == "/api/auth/me":
             return self._get_me()
         if parsed.path in ("/", "/index.html"):
@@ -288,6 +294,50 @@ class Handler(BaseHTTPRequestHandler):
         )
         result["auth"] = ctx.to_dict()
         return self._send_json(result)
+
+    # ------------------------------------------------------------------ #
+    # 受保护：/api/export/<id>（导出文件下载，P0-4 表格导出链路）
+    # ------------------------------------------------------------------ #
+    def _get_export(self, export_id: str) -> None:
+        """下载此前由 export_report_tool 生成的导出文件（鉴权 + 白名单 id 校验）。"""
+        ctx = self._authenticate()
+        if ctx is None:
+            return self._send_json({"error": "unauthorized"}, 401)
+        try:
+            item = default_export_store().get(export_id.strip())
+        except ExportNotFoundError:
+            return self._send_json({"error": "export not found"}, 404)
+
+        # P1-3: 检查导出文件所有权 - 只有文件所有者或管理员可下载
+        item_principal = item.meta.get("principal")
+        if item_principal is not None and item_principal != ctx.principal:
+            # 检查是否为管理员角色（允许管理员访问所有用户的导出）
+            from security.errors import SecurityError
+            from security.scope import scoped_fields
+
+            try:
+                # 尝试获取管理员作用域 - 如果成功则为管理员
+                scoped_fields(None)  # None 表示系统/管理员作用域
+                # 如果没抛异常，则当前用户是管理员，允许访问
+            except SecurityError:
+                # 非管理员且不匹配文件所有者，拒绝访问
+                return self._send_json({"error": "forbidden: export access denied"}, 403)
+
+        body = item.read_bytes()
+        filename = item.meta.get("filename") or f"export.{item.suffix}"
+        # RFC 5987：非 ASCII 文件名用 filename* 携带 UTF-8 编码
+        ascii_fallback = filename.encode("ascii", "ignore").decode() or "export"
+        disposition = (
+            f'attachment; filename="{ascii_fallback}"; ' f"filename*=UTF-8''{quote(filename)}"
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", MIME.get(item.suffix, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Disposition", disposition)
+        self.send_header("X-Content-Type-Options", "nosniff")  # P2: 防止MIME类型混淆攻击
+        self.send_header("X-Request-ID", get_request_id())
+        self.end_headers()
+        self.wfile.write(body)
 
     # ------------------------------------------------------------------ #
     def log_message(self, fmt: str, *args: object) -> None:

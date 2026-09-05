@@ -149,3 +149,44 @@ def test_run_query_degrades_to_heuristic_when_llm_fails(conn, monkeypatch):
     assert result["degraded"] is True
     assert result["mode"] == "degraded"
     assert result["columns"] == ["gmv"]
+
+
+# --------------------------------------------------------------------------- #
+# Multi-Tool Agent：调度轨迹（steps）随查询结果返回
+# --------------------------------------------------------------------------- #
+def test_run_query_text2sql_returns_tool_steps(conn):
+    """TEXT2SQL 经工具调度：steps 记录被调用工具与入参。"""
+    result = run_query("2024年6月成功订单的GMV是多少？", conn=conn)
+    assert "error" not in result
+    steps = result["steps"]
+    assert steps and steps[0]["tool"] == "query_metric"
+    assert steps[0]["success"] is True
+    assert "args" in steps[0] and "duration_ms" in steps[0]
+    assert "answer" in result
+
+
+def test_run_query_our_metrics_trend_uses_trend_tool(conn):
+    """环比/趋势问题路由到 trend_analysis 工具。"""
+    result = run_query("分析过去半年各省份销售额环比趋势", conn=conn)
+    assert "error" not in result
+    tools = [s["tool"] for s in result["steps"]]
+    assert tools == ["trend_analysis"]
+
+
+def test_run_query_export_produces_download_url(conn):
+    """导出意图组合调度：查询 + 导出，返回下载链接。"""
+    result = run_query("把这个月未履约订单明细导出成表格", conn=conn)
+    assert "error" not in result
+    tools = [s["tool"] for s in result["steps"]]
+    assert tools == ["query_metric", "export_report"]
+    assert result["download_urls"] and result["download_urls"][0].startswith("/api/export/")
+    assert all(s["success"] for s in result["steps"])
+
+
+def test_run_query_glossary_returns_steps_and_documents(conn):
+    """口径问题走 explain_glossary：steps + documents，不触达 SQL 引擎。"""
+    result = run_query("GMV 是怎么算的", conn=conn)
+    assert "error" not in result
+    tools = [s["tool"] for s in result["steps"]]
+    assert tools == ["explain_glossary"]
+    assert result["documents"] and result["documents"][0]["key"] == "gmv"

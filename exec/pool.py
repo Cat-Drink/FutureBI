@@ -18,6 +18,8 @@ from pathlib import Path
 
 import duckdb
 
+from config import settings
+
 
 class ReadOnlyConnectionPool:
     """固定容量的只读 DuckDB 连接池（线程安全）。"""
@@ -78,3 +80,24 @@ class ReadOnlyConnectionPool:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+
+# --------------------------------------------------------------------------- #
+# 进程内默认连接池（供工具层 / web 层复用，避免各自重复建池）
+# --------------------------------------------------------------------------- #
+_default_pool: ReadOnlyConnectionPool | None = None
+_pool_lock = threading.Lock()
+
+
+def default_pool() -> ReadOnlyConnectionPool:
+    """进程内复用的默认只读连接池（惰性初始化，线程安全）。
+
+    容量取 settings.DB_POOL_SIZE；供 tools.builtins._query_core 在未注入
+    连接时使用，保证工具层与 web.service 共享同一连接池。
+    """
+    global _default_pool
+    if _default_pool is None:
+        with _pool_lock:
+            if _default_pool is None:
+                _default_pool = ReadOnlyConnectionPool(settings.DB_PATH, settings.DB_POOL_SIZE)
+    return _default_pool

@@ -25,7 +25,7 @@ from agent.errors import PipelineError
 from config import settings
 from security.errors import SecurityError
 from security.scope import scoped_fields
-from semantic.dsl_schema import QueryDSL, RatioMetric, WindowMetric
+from semantic.dsl_schema import Comparison, Granularity, QueryDSL, RatioMetric, WindowMetric
 
 PROVINCES = ["广东", "浙江", "江苏", "北京", "上海", "四川", "湖北", "山东"]
 CATEGORIES = ["数码", "家电", "服饰", "美妆", "食品", "家居"]
@@ -74,6 +74,22 @@ class DeterministicNL2DSL:
                 dsl["time_filter"] = time_filter
             comparison = self._comparison(q)
             if comparison:
+                # 有对比意图但无时间窗口时，补一个确定性默认窗口（禁止 KeyError / 静默丢弃）
+                if "time_filter" not in dsl:
+                    # 导入共享的默认窗口函数以避免重复实现
+                    from agent.time_utils import default_compare_window
+
+                    # heuristic.py 只需要基于 comparison 的简单窗口
+                    # 为了保持与原有行为一致，我们只使用 comparison 部分
+                    time_filter = default_compare_window(
+                        comparison=(
+                            Comparison.YOY
+                            if comparison == "yoy"
+                            else Comparison.MOM if comparison == "mom" else None
+                        ),
+                        granularity=Granularity.MONTH,  # heuristic.py 默认使用 month 粒度
+                    )
+                    dsl["time_filter"] = time_filter.model_dump()
                 dsl["time_filter"]["comparison"] = comparison
             if self._fill_gaps(q):
                 dsl["fill_gaps"] = True
@@ -177,7 +193,7 @@ class DeterministicNL2DSL:
                     "alias": "arpu",
                 }
             )
-        if any(k in ql for k in ("gmv", "销售额", "成交额", "成交金额", "总销售")):
+        if any(k in ql for k in ("gmv", "销售额", "销售总额", "成交额", "成交金额", "总销售")):
             metrics.append(
                 {"kind": "aggregate", "field": "order_amount", "agg": "sum", "alias": "gmv"}
             )
@@ -205,7 +221,18 @@ class DeterministicNL2DSL:
             )
 
         if not metrics:
-            raise PipelineError("无法识别指标（需要 GMV/订单数/去重用户/ARPU/客单价 之一）")
+            # 明细/清单类问题（如"未履约订单明细"）：退化为订单计数 + 明细维度
+            if any(k in q for k in ("明细", "清单")):
+                metrics.append(
+                    {
+                        "kind": "aggregate",
+                        "field": "order_id",
+                        "agg": "count",
+                        "alias": "order_count",
+                    }
+                )
+            else:
+                raise PipelineError("无法识别指标（需要 GMV/订单数/去重用户/ARPU/客单价 之一）")
         return metrics
 
     def _window_metric(self, q: str) -> dict[str, Any] | None:
@@ -274,6 +301,10 @@ class DeterministicNL2DSL:
             add("province")
         if "支付状态" in q:
             add("pay_status")
+        # 明细/清单：逐订单下钻
+        if any(k in q for k in ("明细", "清单")):
+            add("order_id")
+            add("order_time")
         return dims
 
     # ------------------------------------------------------------------ #
@@ -285,6 +316,10 @@ class DeterministicNL2DSL:
         # 支付口径：成功/成交
         if any(k in q for k in ("成功", "成交")):
             filters.append({"field": "pay_status", "operator": "eq", "value": "SUCCESS"})
+
+        # 未履约/未完成订单：支付状态非成功（数据集中为 CANCELLED）
+        if any(k in q for k in ("未履约", "未完成", "未支付")):
+            filters.append({"field": "pay_status", "operator": "ne", "value": "SUCCESS"})
 
         # 省份（单个或多个 -> in）
         provinces = [p for p in PROVINCES if p in q]
@@ -337,12 +372,57 @@ class DeterministicNL2DSL:
                 "absolute": {"start": f"{year:04d}-01-01", "end": f"{year + 1:04d}-01-01"},
             }
 
-        # 相对：上个月 / 过去N天
+        # 相对：上个月 / 这个月 / 过去N天 / 过去N个月 / 过去半年
         if "上个月" in q or "上月" in q:
             return {
                 "granularity": "month",
                 "range_type": "relative",
                 "relative": {"amount": 1, "unit": "month", "mode": "calendar"},
+                "reference_date": settings.AS_OF_DATE.isoformat(),
+            }
+        if "这个月" in q or "本月" in q:
+            # 当前自然月（锚定 AS_OF_DATE）：[当月1日, 次月1日)
+            ref = settings.AS_OF_DATE
+            start = ref.replace(day=1)
+            end = (
+                start.replace(year=start.year + 1, month=1)
+                if start.month == 12
+                else start.replace(month=start.month + 1)
+            )
+            return {
+                "granularity": "day",
+                "range_type": "absolute",
+                "absolute": {"start": start.isoformat(), "end": end.isoformat()},
+            }
+        m = re.search(r"(?:过去|最近|近)\s*(\d+)\s*个?月", q)
+        if m:
+            return {
+                "granularity": "month",
+                "range_type": "relative",
+                "relative": {
+                    "amount": int(m.group(1)),
+                    "unit": "month",
+                    "mode": "trailing",
+                },
+                "reference_date": settings.AS_OF_DATE.isoformat(),
+            }
+        if "半年" in q:
+            return {
+                "granularity": "month",
+                "range_type": "relative",
+                "relative": {"amount": 6, "unit": "month", "mode": "trailing"},
+                "reference_date": settings.AS_OF_DATE.isoformat(),
+            }
+        m = re.search(r"(?:过去|最近|近)\s*(\d+)\s*周", q)
+        if m:
+            return {
+                "granularity": "week",
+                "range_type": "relative",
+                "relative": {
+                    "amount": int(m.group(1)),
+                    "unit": "week",
+                    "mode": "trailing",
+                },
                 "reference_date": settings.AS_OF_DATE.isoformat(),
             }
         m = re.search(r"(?:过去|最近|近)\s*(\d+)\s*(?:天|日)", q)

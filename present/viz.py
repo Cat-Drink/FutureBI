@@ -5,9 +5,15 @@
 2. 维度含下单时间/退款时间（趋势）-> "line"（折线）；
 3. 单维度、单指标 -> "bar"（柱状），类别数 <= 8 可 "pie"（饼图）；
 4. 其余 -> "table"（明细表）。
+
+另提供 ``ChartSpec`` 复合输出契约：图表类型 + 轴映射 + 可选数据，
+供 Multi-Tool Agent 向前端下发"图表渲染指令"。
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
 
 from semantic.dsl_schema import QueryDSL
 
@@ -59,3 +65,39 @@ def viz_config(
         "x": dims[0] if dims else None,
         "y": metrics[0] if metrics else None,
     }
+
+
+@dataclass
+class ChartSpec:
+    """复合输出中的图表渲染指令（图表类型 + 轴映射 + 可选数据）。"""
+
+    chart: str
+    x: str | None = None
+    y: str | None = None
+    columns: list[str] | None = None
+    rows: list[list[Any]] | None = field(default=None)
+
+    def to_dict(self, include_data: bool = True) -> dict[str, Any]:
+        payload: dict[str, Any] = {"chart": self.chart, "x": self.x, "y": self.y}
+        if include_data and self.columns is not None:
+            payload["columns"] = self.columns
+            payload["rows"] = self.rows if self.rows is not None else []
+        return payload
+
+
+def build_chart_spec(
+    dsl: QueryDSL,
+    columns: tuple[str, ...] | list[str],
+    rows: tuple[tuple, ...] | list[tuple],
+    *,
+    data: bool = True,
+) -> ChartSpec:
+    """由 DSL + 结果形状构造 ChartSpec（类型 + 轴 + 可选数据）。"""
+    cfg = viz_config(dsl, columns, rows)
+    return ChartSpec(
+        chart=cfg["chart"],
+        x=cfg["x"],
+        y=cfg["y"],
+        columns=list(columns) if data else None,
+        rows=[list(r) for r in rows] if data else None,
+    )

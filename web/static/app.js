@@ -233,6 +233,7 @@
   }
 
   function clearPipeline() {
+    $("steps").innerHTML = "";
     $("dsl").textContent = "";
     $("sql").textContent = "";
     $("explain").textContent = "";
@@ -258,10 +259,54 @@
     showAnswer("口径文档（RAG 检索结果）", items || "未检索到相关口径文档。");
   }
 
+  // ---------------------------------------------------------------- 调度轨迹 + 导出下载
+  function renderSteps(steps) {
+    var box = $("steps");
+    box.innerHTML = "";
+    if (!steps || !steps.length) {
+      box.innerHTML = "<div class='step-empty'>本次未调用工具（直接回答 / 澄清 / 闲聊）</div>";
+      return;
+    }
+    var html = "<ol class='step-list'>";
+    for (var i = 0; i < steps.length; i++) {
+      var s = steps[i];
+      var badge = s.success
+        ? "<span class='step-badge ok'>成功</span>"
+        : "<span class='step-badge fail'>失败</span>";
+      var args = s.args ? esc(JSON.stringify(s.args, null, 1)) : "";
+      var err = s.error_msg ? "<div class='step-err'>" + esc(s.error_msg) + "</div>" : "";
+      html += "<li class='step-item'>"
+        + "<div class='step-head'><span class='step-tool'>" + esc(s.tool) + "</span>"
+        + badge
+        + "<span class='step-dur'>" + fmt(s.duration_ms) + " ms</span></div>"
+        + "<pre class='step-args'>" + args + "</pre>"
+        + err
+        + "</li>";
+    }
+    html += "</ol>";
+    box.innerHTML = html;
+  }
+
+  function renderDownloads(urls) {
+    if (!urls || !urls.length) { return ""; }
+    var links = urls.map(function (u) {
+      return "<a class='dl-link' href='" + esc(u) + "' download>⬇ 下载导出文件</a>";
+    }).join(" ");
+    return "<div class='downloads'>" + links + "</div>";
+  }
+
+  function renderInsight(data) {
+    // 综合洞察：工具答案 + 导出下载链接
+    var html = "<div class='insight'>" + esc(data.answer || data.explanation || "") + "</div>";
+    html += renderDownloads(data.download_urls);
+    showAnswer("分析结果", html || "（无）");
+  }
+
   // ---------------------------------------------------------------- 主流程
   function render(data) {
     clearPipeline();
     clearAnswer();
+    renderSteps(data.steps);
     if (data.action === "chitchat") {
       showError(data.message || data.error || "抱歉，只能回答数据分析相关问题。");
       return;
@@ -278,6 +323,7 @@
     }
     if (data.error) { showError(data.error); return; }
     hideError();
+    renderInsight(data);
     $("dsl").textContent = JSON.stringify(data.dsl, null, 2);
     $("sql").textContent = data.sql;
     $("explain").textContent = data.explanation || "";

@@ -33,6 +33,8 @@ class AuditRecord:
     scan_rows: int | None = None
     rewrites: int | None = None
     error: str | None = None
+    # Multi-Tool Agent 调度轨迹：每一步的工具名 / 入参 / 耗时 / 成功 / 异常
+    steps: list[dict[str, Any]] | None = None
     created_at: str = field(default_factory=_utcnow_iso)
 
     def to_dict(self) -> dict[str, Any]:
