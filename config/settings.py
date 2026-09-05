@@ -68,6 +68,16 @@ MAX_CONCURRENT_QUERIES: int = int(os.getenv("MAX_CONCURRENT_QUERIES", "4"))
 MAX_AGENT_STEPS: int = int(os.getenv("MAX_AGENT_STEPS", "5"))
 
 # --------------------------------------------------------------------------- #
+# 意图路由与决策中心（Intent Router & Decision Engine）—— 见 agent/router/
+# --------------------------------------------------------------------------- #
+# LLM 语义分类器判决置信度阈值：低于该值拒绝采纳，优雅降级到规则兜底
+ROUTER_MIN_CONFIDENCE: float = float(os.getenv("ROUTER_MIN_CONFIDENCE", "0.6"))
+# 意图语义分类单次 LLM 调用的超时（秒）：意图层耗时可控，绝不让路由拖垮主链路
+ROUTER_LLM_TIMEOUT: int = int(os.getenv("ROUTER_LLM_TIMEOUT", "15"))
+# 意图语义分类使用的模型名；留空则复用 LLM_MODEL（轻量模型优先，降低延迟与成本）
+ROUTER_LLM_MODEL: str = os.getenv("ROUTER_LLM_MODEL", "")
+
+# --------------------------------------------------------------------------- #
 # 审计与结构化日志（P0）—— 见 audit/ 包
 # --------------------------------------------------------------------------- #
 # 是否开启审计写入（对象存储 JSONL + DuckDB 审计表）

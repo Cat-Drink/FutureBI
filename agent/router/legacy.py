@@ -1,10 +1,6 @@
-"""意图路由编排：显式三分类 + 语义澄清反问。
+"""Agent 路由向后兼容层：从旧 agent/router.py 迁移而来，保持既有导入路径不变。
 
-route_query 是受控生产入口（在生成 DSL 之前运行）：
-1. classify_intent 做三分类：Text2SQL / 口径文档 RAG 检索 / 闲聊拒绝；
-2. Text2SQL 且存在缺失时间窗口或未定义业务指标时，返回澄清反问，
-   绝不静默回退默认值（默认时间窗口 / 近似指标）；
-3. RAG 检索口径文档；闲聊礼貌拒绝。
+本文件保留 Action / route_query 等既有 API，供 web/service、测试与第三方调用方无感迁移到新五分类体系。
 """
 
 from __future__ import annotations
@@ -13,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from agent.clarify import Clarification, detect_clarifications
+from agent.clarify import undefined_metric_terms as undefined_metric_terms
 from agent.glossary import GlossaryDoc
 from agent.intent import Intent, classify_intent
 from agent.rag import retrieve
