@@ -1,4 +1,4 @@
-# FutureBI 代码深度与生产健壮性审计报告
+# 评审报告｜深度审计：代码深度与生产健壮性（2026-09）
 
 > 审计日期：会话内实时审计 · 审计方式：逐文件通读 + 安全防线实证渗透测试 + 全量测试验证
 > 审计范围：agent/ compiler/ exec/ semantic/ security/ auth/ present/ web/ audit/ eval/ mock/（非测试 Python ~5893 行）

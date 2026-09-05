@@ -1,4 +1,4 @@
-# FutureBI 生产就绪度（Production Readiness）评审报告
+# 评审报告｜就绪度评审：生产就绪度（Production Readiness）（2026-09）
 
 - 评审对象：FutureBI（规格驱动 ChatBI：NL → DSL(JSON) → 确定性 SQL 编译器 → DuckDB）
 - 评审方式：全量代码走读（agent/semantic/compiler/exec/security/auth/audit/present/web）+ 运行时实测取证
