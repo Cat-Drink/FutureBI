@@ -35,6 +35,11 @@ class AuditRecord:
     error: str | None = None
     # Multi-Tool Agent 调度轨迹：每一步的工具名 / 入参 / 耗时 / 成功 / 异常
     steps: list[dict[str, Any]] | None = None
+    # 意图路由与决策中心（Intent Router）：每轮提问的分类结果与路由性能，
+    # 供生产环境离线统计分流准确率与漏斗分析
+    detected_intent: str | None = None
+    routing_latency_ms: float | None = None
+    routing_reason: str | None = None
     created_at: str = field(default_factory=_utcnow_iso)
 
     def to_dict(self) -> dict[str, Any]:

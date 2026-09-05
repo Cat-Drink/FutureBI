@@ -32,6 +32,10 @@ _AUDIT_COLUMN_TYPES: dict[str, str] = {
     "scan_rows": "BIGINT",
     "rewrites": "BIGINT",
     "error": "VARCHAR",
+    # 意图路由字段（Intent Router）：detected_intent / 路由耗时 / 决策原因
+    "detected_intent": "VARCHAR",
+    "routing_latency_ms": "DOUBLE",
+    "routing_reason": "VARCHAR",
     "created_at": "VARCHAR",
 }
 
@@ -45,8 +49,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
 _INSERT_SQL = """
 INSERT INTO audit_log
     (request_id, session_id, user_name, principal, prompt, retrieval_context,
-     dsl, sql, latency_ms, row_count, scan_rows, rewrites, error, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     dsl, sql, latency_ms, row_count, scan_rows, rewrites, error,
+     detected_intent, routing_latency_ms, routing_reason, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -178,6 +183,9 @@ class AuditStore:
                         record.scan_rows,
                         record.rewrites,
                         record.error,
+                        record.detected_intent,
+                        record.routing_latency_ms,
+                        record.routing_reason,
                         record.created_at,
                     ],
                 )
