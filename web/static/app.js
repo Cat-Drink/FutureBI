@@ -31,17 +31,25 @@
   function getToken() { try { return sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
   function setToken(t) { try { sessionStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
   function clearToken() { try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+  // 服务端签发的会话 ID（多轮上下文载体；跨轮查询必须复用同一会话）
+  var SID_KEY = "futurebi_sid";
+  function getSid() { try { return sessionStorage.getItem(SID_KEY) || ""; } catch (e) { return ""; } }
+  function setSid(s) { try { sessionStorage.setItem(SID_KEY, s); } catch (e) {} }
+  function clearSid() { try { sessionStorage.removeItem(SID_KEY); } catch (e) {} }
 
   function api(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
     var token = getToken();
     if (token) { opts.headers.Authorization = "Bearer " + token; }
+    var sid = getSid();
+    if (sid) { opts.headers["X-Session-ID"] = sid; }
     return fetch(path, opts).then(function (r) {
       return r.json().then(function (data) {
         if (r.status === 401) {
           // 会话失效 -> 回到登录态
           clearToken();
+          clearSid();
           showLogin();
         }
         return data;
@@ -79,6 +87,7 @@
       .then(function (data) {
         if (data.token) {
           setToken(data.token);
+          if (data.session_id) { setSid(data.session_id); }
           $("password").value = "";
           showUser(data.user);
         } else {
@@ -296,8 +305,12 @@
   }
 
   function renderInsight(data) {
-    // 综合洞察：工具答案 + 导出下载链接
-    var html = "<div class='insight'>" + esc(data.answer || data.explanation || "") + "</div>";
+    // 综合洞察：多轮上下文说明 + 工具答案 + 导出下载链接
+    var html = "";
+    if (data.context_summary) {
+      html += "<div class='ctx-summary'>🔁 " + esc(data.context_summary) + "</div>";
+    }
+    html += "<div class='insight'>" + esc(data.answer || data.explanation || "") + "</div>";
     html += renderDownloads(data.download_urls);
     showAnswer("分析结果", html || "（无）");
   }

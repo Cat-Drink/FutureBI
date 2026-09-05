@@ -44,6 +44,7 @@ class QueryMetricTool(BaseTool):
             conn=ctx.conn,
             executor=ctx.executor,
             rewriter=ctx.rewriter,
+            dsl=ctx.base_dsl,  # 会话上下文继承：非 None 时跳过 NL->DSL，仍强制安全守卫
         )
         viz = viz_config(result.dsl, result.columns, result.rows)
         data = {

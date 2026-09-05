@@ -30,6 +30,16 @@ from semantic.dsl_schema import Comparison, Granularity, QueryDSL, RatioMetric, 
 PROVINCES = ["广东", "浙江", "江苏", "北京", "上海", "四川", "湖北", "山东"]
 CATEGORIES = ["数码", "家电", "服饰", "美妆", "食品", "家居"]
 
+# 大区 -> 省份列表（行政区划映射，仅收录 mock 数仓实际存在的省份，供"地区"类
+# 提问与会话上下文继承共用；与 mock.init_duckdb.PROVINCES 保持同步）。
+REGIONS: dict[str, list[str]] = {
+    "华北": ["北京"],
+    "华东": ["上海", "江苏", "浙江", "山东"],
+    "华南": ["广东"],
+    "华中": ["湖北"],
+    "西南": ["四川"],
+}
+
 
 class DeterministicNL2DSL:
     """关键词规则版的 NL -> DSL（覆盖 golden 高频场景）。"""
@@ -328,6 +338,15 @@ class DeterministicNL2DSL:
                 filters.append({"field": "province", "operator": "eq", "value": provinces[0]})
             else:
                 filters.append({"field": "province", "operator": "in", "value": provinces})
+
+        # 大区（华东/华南等）-> 省份 in 过滤（与省份过滤互斥，先命中大区）
+        if not provinces:
+            for region, region_provinces in REGIONS.items():
+                if region in q:
+                    filters.append(
+                        {"field": "province", "operator": "in", "value": region_provinces}
+                    )
+                    break
 
         # 类目
         cats = [c for c in CATEGORIES if c in q]

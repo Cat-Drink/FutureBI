@@ -14,6 +14,13 @@ from typing import Any
 import duckdb
 
 from agent.errors import PipelineError
+from agent.memory import (
+    SessionState,
+    append_message,
+    default_session_store,
+    derive_active_entities,
+    resolve_context,
+)
 from agent.pipeline import rewrite_dsl
 from agent.router import Action, route_query
 from agent.slotfill import ClarifyContext, attempt_fill, default_slot_store, pending_kinds
@@ -175,6 +182,7 @@ def run_query(
         "query": query,
         "principal": principal,
         "request_id": rid,
+        "session_id": session_id,
     }
 
     dsl: QueryDSL | None = None
@@ -187,6 +195,13 @@ def run_query(
 
     ctx_override: dict[str, Any] | None = None
     effective_query = query
+    # 会话上下文记忆（Session Memory）：按 (session_id, user_id) 强绑定取状态；
+    # 跨用户 / 过期一律返回 None（拒绝继承，Session Bleeding 防护）。
+    memory_store = default_session_store() if session_id else None
+    owner = user or principal or "anonymous"
+    state = memory_store.get(session_id, owner) if memory_store is not None else None
+    base_dsl: Any = None
+    context_summary: str | None = None
     try:
         # P0-5 澄清槽位回填：命中上一轮挂起上下文且答案可填槽时，合并回原问题
         slot_store = default_slot_store() if session_id else None
@@ -208,6 +223,11 @@ def run_query(
         if route.action == Action.CHITCHAT:
             if slot_store is not None:
                 slot_store.clear(session_id)
+            # 话题切换：闲聊轮显式清理旧 DSL 依赖，避免脏上下文干扰后续查询
+            if memory_store is not None and state is not None:
+                state.last_dsl = None
+                append_message(state, "user", effective_query)
+                memory_store.update(session_id, owner, state)
             error = route.message
             result["error"] = error
             result["steps"] = []
@@ -221,6 +241,10 @@ def run_query(
                         pending=tuple(c.kind for c in route.clarifications),
                     ),
                 )
+            # 澄清轮保留上轮有效 DSL（用户补口径后可能回到原查询语境）
+            if memory_store is not None and state is not None:
+                append_message(state, "user", effective_query)
+                memory_store.update(session_id, owner, state)
             result["clarifications"] = [c.to_dict() for c in route.clarifications]
             result["steps"] = []
             error = route.message
@@ -249,6 +273,12 @@ def run_query(
                 if agent_result.documents
                 else "未检索到相关口径文档，请换一种表述或补充指标口径。"
             )
+            # 话题切换：口径检索轮显式清理旧 DSL 依赖
+            if memory_store is not None and state is not None:
+                state.last_dsl = None
+                append_message(state, "user", effective_query)
+                append_message(state, "assistant", agent_result.answer or "")
+                memory_store.update(session_id, owner, state)
             ctx_override = {
                 "intent": "rag",
                 "documents": [d["key"] for d in agent_result.documents],
@@ -258,6 +288,18 @@ def run_query(
             if slot_store is not None:
                 slot_store.clear(session_id)
             agent = default_tool_agent()
+
+            # 会话上下文继承与消解（Contextual Merging）：
+            # - 省略指代 / 下钻 -> 注入基于上轮 DSL 的合并结果（base_dsl）；
+            # - 话题切换 -> 显式清理旧 DSL 依赖（last_dsl 置空）。
+            if memory_store is not None and state is not None:
+                resolution = resolve_context(effective_query, state.last_dsl, principal)
+                if resolution.mode in ("inherit", "drilldown"):
+                    base_dsl = resolution.dsl
+                    context_summary = resolution.summary or None
+                elif resolution.mode == "fresh" and resolution.reason == "topic_switch":
+                    state.last_dsl = None
+                    context_summary = resolution.summary or None
 
             # P0-6：未显式注入连接时，从只读连接池取用（用完归还），
             # 并用全局信号量限制并发查询数（超配额排队，避免打满单机实例）。
@@ -275,6 +317,7 @@ def run_query(
                         executor=execute_sql,  # 模块级绑定：测试桩在调用期生效
                         rewriter=rewrite_dsl,
                         request_id=rid,
+                        base_dsl=base_dsl,  # 会话上下文继承注入（None 时行为不变）
                     )
             finally:
                 if own_conn and pool is not None:
@@ -294,6 +337,10 @@ def run_query(
                 result["error"] = error
                 result["error_detail"] = agent_result.error
                 circuit_breaker = _CIRCUIT_BY_ERROR_CLASS.get(agent_result.error_type)
+                # 自愈彻底失败不污染上轮有效状态：仅追加用户消息，last_dsl 保持不动
+                if memory_store is not None and state is not None:
+                    append_message(state, "user", effective_query)
+                    memory_store.update(session_id, owner, state)
             else:
                 dsl = agent_result.dsl
                 sql = agent_result.sql
@@ -308,6 +355,16 @@ def run_query(
                 result["rows"] = rows
                 result["explanation"] = agent_result.explanation
                 result["viz"] = agent_result.viz
+                # 执行闭环写回：查询成功并通过安全校验后，更新 last_dsl / active_entities /
+                # 滚动历史（供下一轮省略指代 / 下钻 / 话题切换判定）
+                if memory_store is not None and dsl is not None:
+                    if state is None:
+                        state = SessionState(session_id=session_id, user_id=owner)
+                    state.last_dsl = dsl
+                    state.active_entities = derive_active_entities(dsl)
+                    append_message(state, "user", effective_query)
+                    append_message(state, "assistant", agent_result.answer or "", dsl=dsl)
+                    memory_store.update(session_id, owner, state)
     except Exception as exc:
         error = _friendly_error(exc)
         result["error"] = error
@@ -389,6 +446,9 @@ def run_query(
                 "row_count": row_count,
             },
         )
+    # 响应契约：透传会话继承/重写说明（前端感知多轮上下文复用）
+    if context_summary:
+        result["context_summary"] = context_summary
     return result
 
 

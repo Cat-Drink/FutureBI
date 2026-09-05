@@ -190,3 +190,45 @@ def test_run_query_glossary_returns_steps_and_documents(conn):
     tools = [s["tool"] for s in result["steps"]]
     assert tools == ["explain_glossary"]
     assert result["documents"] and result["documents"][0]["key"] == "gmv"
+
+
+# --------------------------------------------------------------------------- #
+# JWT 认证路径的会话绑定（Session Memory 载体）：跨用户借用一律拒绝
+# --------------------------------------------------------------------------- #
+def _fresh_session(username: str):
+    from auth.gateway import create_session, default_identity_store
+
+    user = default_identity_store().require_user(username)
+    return create_session(user)
+
+
+def test_bound_session_id_accepts_owner():
+    """同用户携带 X-Session-ID -> 绑定成功。"""
+    from web.server import _bound_session_id
+
+    session = _fresh_session("admin")
+    assert _bound_session_id({"X-Session-ID": session.session_id}, "admin") == session.session_id
+
+
+def test_bound_session_id_rejects_foreign_user():
+    """跨用户借用会话 ID -> 拒绝绑定（返回 None，不读取他人状态）。"""
+    from web.server import _bound_session_id
+
+    session = _fresh_session("admin")
+    assert _bound_session_id({"X-Session-ID": session.session_id}, "bob") is None
+
+
+def test_bound_session_id_missing_or_invalid():
+    from web.server import _bound_session_id
+
+    assert _bound_session_id({}, "admin") is None
+    assert _bound_session_id({"X-Session-ID": "no-such-session"}, "admin") is None
+    assert _bound_session_id({"X-Session-ID": ""}, "admin") is None
+
+
+def test_query_response_carries_session_id(conn):
+    """API 响应契约：带 session_id 的请求返回相同 session_id（多轮上下文载体）。"""
+    result = run_query(
+        "上个月华东地区的GMV是多少？", conn=conn, session_id="http-sess-1", user="alice"
+    )
+    assert result["session_id"] == "http-sess-1"

@@ -147,6 +147,7 @@ body {
 
 /* 综合洞察 + 导出下载 */
 .insight { font-size: 15px; line-height: 1.9; color: var(--text); }
+.ctx-summary { font-size: 13px; color: var(--muted); background: rgba(120, 120, 120, 0.08); border: 1px dashed rgba(120, 120, 120, 0.35); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
 .downloads { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
 .dl-link { display: inline-block; padding: 8px 14px; background: var(--accent); color: #fff; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 600; }
 .dl-link:hover { opacity: 0.9; }

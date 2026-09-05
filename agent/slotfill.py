@@ -69,6 +69,13 @@ class ClarifySlotStore:
         with self._lock:
             self._items.pop(session_id, None)
 
+    def clear_all(self) -> int:
+        """清空全部槽位上下文（管理 / 测试用），返回清理条数。"""
+        with self._lock:
+            n = len(self._items)
+            self._items.clear()
+            return n
+
 
 _default_store: ClarifySlotStore | None = None
 _store_lock = threading.Lock()

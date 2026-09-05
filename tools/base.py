@@ -97,6 +97,9 @@ class ToolContext:
     rewriter: Any = None
     request_id: str | None = None
     prior: ToolResult | None = None
+    # 会话上下文继承注入：上轮成功执行的结构化 DSL（来自 agent.memory 的上下文合并）。
+    # 非 None 时数据工具跳过 NL->DSL 生成，仍强制 apply_policy + 编译 + 执行护栏。
+    base_dsl: Any = None
 
 
 class BaseTool(ABC):

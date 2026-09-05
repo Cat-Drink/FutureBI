@@ -256,6 +256,10 @@ class Handler(BaseHTTPRequestHandler):
 
         鉴权：Bearer JWT / 会话。principal 一律取自服务端映射的身份
         （auth.gateway），请求体中的 principal 字段被忽略（防客户端提权）。
+
+        会话上下文（Session Memory / 澄清槽位）：优先取认证会话 ctx.session_id；
+        JWT 认证时允许经 X-Session-ID / session Cookie 显式绑定服务端会话，
+        但必须属于当前已认证用户（跨用户借用一律拒绝）。
         """
         ctx = self._authenticate()
         if ctx is None:
@@ -267,6 +271,8 @@ class Handler(BaseHTTPRequestHandler):
         query = str(body.get("query", "")).strip()
         if not query:
             return self._send_json({"error": "query is required"}, 400)
+
+        session_id = ctx.session_id or _bound_session_id(self.headers, ctx.username)
 
         # 客户端传入的 principal 一律忽略（P0：服务端强制绑定）
         client_principal = body.get("principal")
@@ -282,14 +288,14 @@ class Handler(BaseHTTPRequestHandler):
 
         set_request_context(
             request_id=self.headers.get("X-Request-ID"),
-            session_id=ctx.session_id,
+            session_id=session_id,
             user=ctx.username,
         )
         result = run_query(
             query,
             ctx.principal,
             request_id=self.headers.get("X-Request-ID"),
-            session_id=ctx.session_id,
+            session_id=session_id,
             user=ctx.username,
         )
         result["auth"] = ctx.to_dict()
@@ -369,6 +375,22 @@ def _cookie_session_id(cookie_header: str | None) -> str | None:
         return morsel.value if morsel else None
     except Exception:
         return None
+
+
+def _bound_session_id(headers, username: str) -> str | None:
+    """解析请求携带的会话 ID 并校验归属（供 JWT 认证路径绑定会话上下文）。
+
+    会话必须存在且属于当前已认证用户（username 一致）；缺失 / 过期 / 跨用户
+    借用一律返回 None —— 该请求退化为"无会话上下文"（不继承任何记忆），
+    绝不把其他用户的会话状态带入本次查询。
+    """
+    sid = headers.get("X-Session-ID") or _cookie_session_id(headers.get("Cookie"))
+    if not sid:
+        return None
+    session = default_session_store().get(sid)
+    if session is None or session.username != username:
+        return None
+    return session.session_id
 
 
 def _startup_security_issues(host: str) -> list[str]:

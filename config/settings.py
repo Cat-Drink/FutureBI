@@ -53,6 +53,13 @@ MAX_RESULT_ROWS: int = int(os.getenv("MAX_RESULT_ROWS", "20000"))
 SQL_SELF_HEAL_MAX_RETRIES: int = int(os.getenv("SQL_SELF_HEAL_MAX_RETRIES", "1"))
 # 澄清槽位上下文 TTL（秒）：用户回答"最近30天"等短语的合并窗口（P0-5）
 CLARIFY_SLOT_TTL: int = int(os.getenv("CLARIFY_SLOT_TTL", "1800"))
+# 会话上下文记忆（Session Memory & Multi-turn Context）——见 agent/memory.py
+# 会话状态 TTL（秒）：超过未交互自动失效，防止无限悬挂
+SESSION_MEMORY_TTL: int = int(os.getenv("SESSION_MEMORY_TTL", "1800"))
+# 进程内会话状态容量上限（超出按最久未访问 LRU 淘汰）
+SESSION_MEMORY_MAX_SESSIONS: int = int(os.getenv("SESSION_MEMORY_MAX_SESSIONS", "1000"))
+# 滚动保留的历史问答轮数（每轮 user + assistant 两条，控制 Token 消耗）
+SESSION_MEMORY_HISTORY_TURNS: int = int(os.getenv("SESSION_MEMORY_HISTORY_TURNS", "5"))
 # 执行层并发闸（P0-6）：只读连接池容量 + 全局并发信号量（"排队 + 熔断"双保险）
 DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "4"))
 MAX_CONCURRENT_QUERIES: int = int(os.getenv("MAX_CONCURRENT_QUERIES", "4"))

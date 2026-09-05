@@ -75,7 +75,12 @@ class TrendAnalysisTool(BaseTool):
     args_schema = TrendAnalysisArgs
 
     def execute(self, validated_args: TrendAnalysisArgs, ctx: ToolContext) -> ToolResult:
-        dsl, degraded = self._parse(validated_args.query, ctx.principal)
+        # 会话上下文继承：有 base_dsl 时以其为基础（省略指代/下钻语句本身无法独立
+        # 解析出指标），否则走完整 NL->DSL 解析
+        if ctx.base_dsl is not None:
+            dsl, degraded = ctx.base_dsl, False
+        else:
+            dsl, degraded = self._parse(validated_args.query, ctx.principal)
         dsl = self._normalize_trend(dsl, validated_args)
         result = run_guarded_query(
             validated_args.query,

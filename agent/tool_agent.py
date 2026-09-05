@@ -467,8 +467,13 @@ class ToolAgent:
         executor: Any = None,
         rewriter: Any = None,
         request_id: str | None = None,
+        base_dsl: Any = None,
     ) -> AgentResult:
-        """执行一次完整的多工具调度，返回复合结果 AgentResult（不抛异常）。"""
+        """执行一次完整的多工具调度，返回复合结果 AgentResult（不抛异常）。
+
+        base_dsl：会话上下文继承注入的结构化 DSL（agent.memory 合并产物），
+        非 None 时数据工具以其为基础执行，仍走安全守卫 + 编译 + 执行护栏。
+        """
         result = AgentResult(query=query)
 
         try:
@@ -498,7 +503,16 @@ class ToolAgent:
                 break
             step_no += 1
             record, tool_result = self._execute_once(
-                call, query, principal, conn, executor, rewriter, request_id, step_no, outputs
+                call,
+                query,
+                principal,
+                conn,
+                executor,
+                rewriter,
+                request_id,
+                step_no,
+                outputs,
+                base_dsl,
             )
             outputs.append(tool_result)
             result.steps.append(record)
@@ -517,7 +531,16 @@ class ToolAgent:
                 break
             step_no += 1
             rec2, res2 = self._execute_once(
-                corrected, query, principal, conn, executor, rewriter, request_id, step_no, outputs
+                corrected,
+                query,
+                principal,
+                conn,
+                executor,
+                rewriter,
+                request_id,
+                step_no,
+                outputs,
+                base_dsl,
             )
             outputs.append(res2)
             result.steps.append(rec2)
@@ -546,6 +569,7 @@ class ToolAgent:
         request_id: str | None,
         step_no: int,
         prior_outputs: list[ToolResult],
+        base_dsl: Any = None,
     ) -> tuple[ToolInvocationRecord, ToolResult]:
         """执行一次工具调用，返回 (轨迹记录, 工具结果)。"""
         try:
@@ -577,6 +601,7 @@ class ToolAgent:
             rewriter=rewriter,
             request_id=request_id,
             prior=prior_outputs[-1] if prior_outputs else None,
+            base_dsl=base_dsl,
         )
         tool_result = tool.run(call.args, ctx)
         # 打点：工具调用成功/失败计入进程级可观测性（audit.metrics）

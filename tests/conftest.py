@@ -22,3 +22,14 @@ def conn() -> duckdb.DuckDBPyConnection:
     build_tables(c)
     yield c
     c.close()
+
+
+@pytest.fixture(autouse=True)
+def _clean_session_memory():
+    """每个测试后清空会话记忆存储与澄清槽位，避免跨测试状态泄漏。"""
+    yield
+    from agent.memory import default_session_store
+    from agent.slotfill import default_slot_store
+
+    default_session_store().clear_all()
+    default_slot_store().clear_all()
