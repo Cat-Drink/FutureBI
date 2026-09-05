@@ -13,6 +13,7 @@ from typing import Any
 
 import duckdb
 
+from agent.clarify import detect_clarifications
 from agent.errors import PipelineError
 from agent.memory import (
     SessionState,
@@ -22,7 +23,8 @@ from agent.memory import (
     resolve_context,
 )
 from agent.pipeline import rewrite_dsl
-from agent.router import Action, route_query
+from agent.router import ROUTING_LATENCY_MS, IntentType, route_decision
+from agent.router.legacy import _CHITCHAT_REPLY
 from agent.slotfill import ClarifyContext, attempt_fill, default_slot_store, pending_kinds
 from agent.tool_agent import AgentResult, default_tool_agent
 from audit.logging import get_logger, set_request_context
@@ -45,6 +47,75 @@ from semantic import catalog
 from semantic.dsl_schema import QueryDSL, RatioMetric, WindowMetric
 
 logger = get_logger("web.service")
+
+
+# 新五分类意图 -> 旧 action 字符串（前端与既有测试向后兼容）
+_ACTION_BY_INTENT: dict[IntentType, str] = {
+    IntentType.CHITCHAT: "chitchat",
+    IntentType.SYSTEM_ACTION: "system_action",
+    IntentType.CLARIFY: "clarify",
+    IntentType.GLOSSARY_EXPLAIN: "rag",
+    IntentType.DATA_QUERY: "text2sql",
+}
+
+
+def _legacy_intent(decision) -> str:
+    """把新五分类意图映射为向后兼容的旧 intent 字符串。
+
+    CLARIFY 无独立旧意图：按其候选上游语境（data_query / glossary_explain）映射，
+    与旧实现"澄清发生在 TEXT2SQL 语境"的行为保持一致。
+    """
+    if decision.intent == IntentType.CLARIFY:
+        candidate = decision.extracted_entities.get("candidate")
+        return candidate if candidate in ("text2sql", "rag") else "text2sql"
+    return _ACTION_BY_INTENT[decision.intent]
+
+
+def _handle_system_action(
+    action: str | None,
+    *,
+    memory_store,
+    session_id: str | None,
+    owner: str,
+    slot_store,
+    principal: str | None,
+) -> str:
+    """执行白名单化的系统控制动作，返回面向用户的提示文案。
+
+    安全约束：
+    - 动作白名单固定（会话管理 / 权限查看 / 数据源状态探测 / 退出），未知动作
+      一律安全提示，绝不执行任意系统指令；
+    - 身份鉴权由调用方网关强制绑定（principal 取自服务端映射），此处仅按
+      (session_id, owner) 归属操作会话状态，跨用户 clear 返回 False 不误删；
+    - 本分支不触达 semantic/、compiler/ 与底层数据库引擎。
+    """
+    if action == "reset_session":
+        if slot_store is not None:
+            slot_store.clear(session_id)
+        if memory_store is not None:
+            memory_store.clear(session_id, owner)
+        return "已清空当前会话的上下文记忆，可以开始新一轮对话。"
+    if action == "view_permissions":
+        from security.scope import scoped_fields, scoped_tables
+
+        tables = sorted(scoped_tables(principal))
+        fields = sorted(scoped_fields(principal))
+        return (
+            f"当前身份「{principal or '系统默认'}」可查询 {len(tables)} 张表、"
+            f"{len(fields)} 个字段。可访问表：{'、'.join(tables)}；"
+            f"可引用字段：{'、'.join(fields)}。"
+        )
+    if action == "source_status":
+        db_exists = settings.DB_PATH.exists()
+        return (
+            f"数据源状态：本地 DuckDB 数仓文件{'已就绪' if db_exists else '缺失（需初始化）'}；"
+            f"只读连接池容量 {settings.DB_POOL_SIZE}；并发查询上限 "
+            f"{settings.MAX_CONCURRENT_QUERIES}；审计写入"
+            f"{'开启' if settings.AUDIT_ENABLED else '关闭'}。"
+        )
+    if action == "exit":
+        return "好的，再见！如需继续分析，随时回来。"
+    return "系统操作已完成。"
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -215,41 +286,71 @@ def run_query(
                 result["filled_from"] = pending.original_query
                 slot_store.clear(session_id)
 
-        route = route_query(effective_query, principal)
-        result["intent"] = route.intent.value
-        result["action"] = route.action.value
-        result["message"] = route.message
+        # 意图路由与决策中心：五分类判决（Fast-Path -> LLM -> 规则兜底），
+        # 结合会话历史与上轮 DSL 综合研判上下文追问；随之分派到互不干扰的处理分支。
+        decision = route_decision(
+            effective_query,
+            history=state.history if state is not None else None,
+            last_dsl=state.last_dsl if state is not None else None,
+            principal=principal,
+        )
+        detected = decision.intent
+        # 响应契约：新五分类意图（detected_intent）+ 置信度 + 路由原因 + 路由耗时；
+        # intent/action 保持旧值向后兼容（前端渲染与既有测试依赖）
+        result["detected_intent"] = detected.value
+        result["confidence"] = decision.confidence
+        result["routing_reason"] = decision.reason
+        result[ROUTING_LATENCY_MS] = decision.routing_latency_ms
+        result["intent"] = _legacy_intent(decision)
+        result["action"] = _ACTION_BY_INTENT[detected]
+        result["message"] = decision.reason
 
-        if route.action == Action.CHITCHAT:
+        if detected == IntentType.CHITCHAT:
             if slot_store is not None:
                 slot_store.clear(session_id)
-            # 话题切换：闲聊轮显式清理旧 DSL 依赖，避免脏上下文干扰后续查询
+            # 记忆状态解耦：闲聊轮绝不污染 last_dsl / active_entities 等结构化数据
+            # 查询状态，仅追加用户消息保留多轮对话语境（后续省略指代仍可继承上轮 DSL）
             if memory_store is not None and state is not None:
-                state.last_dsl = None
                 append_message(state, "user", effective_query)
                 memory_store.update(session_id, owner, state)
-            error = route.message
+            error = _CHITCHAT_REPLY
             result["error"] = error
             result["steps"] = []
-        elif route.action == Action.CLARIFY:
-            # 保存澄清上下文，供用户短语回答时回填槽位
-            if slot_store is not None:
+        elif detected == IntentType.CLARIFY:
+            # 澄清反问：优先用路由判决预提取的澄清问题（缺失时间 / 未定义指标 / 信息不足）
+            clarifications = decision.extracted_entities.get("clarifications") or []
+            if not clarifications:
+                clarifications = [c.to_dict() for c in detect_clarifications(effective_query)]
+            pending = tuple(c["kind"] for c in clarifications if isinstance(c, dict))
+            if slot_store is not None and pending:
                 slot_store.set(
                     session_id,
-                    ClarifyContext(
-                        original_query=effective_query,
-                        pending=tuple(c.kind for c in route.clarifications),
-                    ),
+                    ClarifyContext(original_query=effective_query, pending=pending),
                 )
             # 澄清轮保留上轮有效 DSL（用户补口径后可能回到原查询语境）
             if memory_store is not None and state is not None:
                 append_message(state, "user", effective_query)
                 memory_store.update(session_id, owner, state)
-            result["clarifications"] = [c.to_dict() for c in route.clarifications]
+            result["clarifications"] = clarifications
             result["steps"] = []
-            error = route.message
+            error = (
+                "；".join(c["question"] for c in clarifications if isinstance(c, dict))
+                or decision.reason
+            )
             result["error"] = error
-        elif route.action == Action.RAG:
+        elif detected == IntentType.SYSTEM_ACTION:
+            # 系统控制与状态操作（白名单动作，不触达数仓引擎）：
+            # 会话管理 / 权限查看 / 数据源状态探测，身份由调用方网关强制绑定
+            result["answer"] = _handle_system_action(
+                decision.extracted_entities.get("action"),
+                memory_store=memory_store,
+                session_id=session_id,
+                owner=owner,
+                slot_store=slot_store,
+                principal=principal,
+            )
+            result["steps"] = []
+        elif detected == IntentType.GLOSSARY_EXPLAIN:
             # 口径文档检索：经 explain_glossary_tool 执行，记录调度轨迹（不触达 SQL 引擎）
             if slot_store is not None:
                 slot_store.clear(session_id)
@@ -269,7 +370,7 @@ def run_query(
                 )
 
             result["message"] = (
-                route.message
+                "已检索到以下指标口径文档："
                 if agent_result.documents
                 else "未检索到相关口径文档，请换一种表述或补充指标口径。"
             )
@@ -284,7 +385,7 @@ def run_query(
                 "documents": [d["key"] for d in agent_result.documents],
             }
         else:
-            # TEXT2SQL：Multi-Tool Agent 调度（Plan & Select -> Execute & Guard -> Reflect）
+            # DATA_QUERY：Multi-Tool Agent 调度（Plan & Select -> Execute & Guard -> Reflect）
             if slot_store is not None:
                 slot_store.clear(session_id)
             agent = default_tool_agent()
@@ -422,6 +523,10 @@ def run_query(
         rewrites=rewrites,
         error=error,
         steps=result.get("steps"),
+        # 意图路由字段：每轮提问的分类结果 / 路由耗时 / 决策原因（分流漏斗分析）
+        detected_intent=result.get("detected_intent"),
+        routing_latency_ms=result.get(ROUTING_LATENCY_MS),
+        routing_reason=result.get("routing_reason"),
     )
 
     store = audit_store if audit_store is not None else _default_audit_store()
